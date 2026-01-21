@@ -411,3 +411,226 @@ def from_bytes(cls, data: bytes) -> Self: ...
 @classmethod
 def from_dict(cls, data: dict[str, Any]) -> Self: ...
 ```
+
+## Streaming Data Protocol
+
+A binary protocol for efficient streaming of time-series measurement data. Designed for simplicity on embedded producers and flexibility for consumers.
+
+### Design Principles
+
+- **Network byte order**: All multi-byte values are big-endian
+- **Schema-first**: Schema message must be received before data can be interpreted
+- **Same channel**: Schema and data messages share one NATS subject per source (no race conditions)
+- **Fixed schema per session**: Data format does not change during producer lifetime; restart may change schema
+- **Periodic schema retransmission**: Schema retransmitted every 1 second for late-joining consumers
+
+### String Encoding
+
+All strings are length-prefixed:
+
+```
+┌──────────────────────────────┐
+│ length: u8                   │  (max 255 bytes)
+│ data: u8[length]             │  (UTF-8 encoded)
+└──────────────────────────────┘
+```
+
+### Type Codes
+
+| Code | Type | Size (bytes) | Description |
+|------|------|--------------|-------------|
+| 0x01 | i8   | 1 | Signed 8-bit integer |
+| 0x02 | i16  | 2 | Signed 16-bit integer |
+| 0x03 | i32  | 4 | Signed 32-bit integer |
+| 0x04 | i64  | 8 | Signed 64-bit integer |
+| 0x05 | u8   | 1 | Unsigned 8-bit integer |
+| 0x06 | u16  | 2 | Unsigned 16-bit integer |
+| 0x07 | u32  | 4 | Unsigned 32-bit integer |
+| 0x08 | u64  | 8 | Unsigned 64-bit integer |
+| 0x09 | f32  | 4 | IEEE 754 single-precision float |
+| 0x0A | f64  | 8 | IEEE 754 double-precision float |
+
+### Message Types
+
+#### Schema Message (0x01)
+
+Defines the structure of subsequent data messages. Must be transmitted:
+- At producer startup
+- Every 1 second thereafter
+- On the same NATS subject as data messages
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ SCHEMA MESSAGE                                              │
+├─────────────────────────────────────────────────────────────┤
+│ msg_type: u8 = 0x01                                         │
+│ schema_id: u32           (CRC32 of field definitions)       │
+│ source_id: string        (length-prefixed, producer ID)     │
+│ field_count: u16                                            │
+│ fields[field_count]:                                        │
+│   ├─ name: string        (length-prefixed, field name)      │
+│   ├─ dtype: u8           (type code from table above)       │
+│   └─ unit: string        (length-prefixed, e.g., "V", "mA") │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**schema_id calculation**: CRC32 computed over the concatenation of all field definitions (name + dtype + unit) in order. This allows consumers to detect schema changes without comparing full field lists.
+
+#### Data Message (0x02)
+
+Contains one or more sample vectors. Each vector contains one value per field defined in the schema.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ DATA MESSAGE                                                │
+├─────────────────────────────────────────────────────────────┤
+│ msg_type: u8 = 0x02                                         │
+│ schema_id: u32           (must match received schema)       │
+│ timestamp_ns: u64        (tick count of first sample, ns)   │
+│ period_ns: u64           (time delta between samples, ns)   │
+│ sample_count: u16        (number of sample vectors)         │
+│ samples[sample_count]:                                      │
+│   └─ values[field_count]: (packed binary per schema types)  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Timestamp model**:
+- `timestamp_ns`: Absolute timestamp of the first sample in nanoseconds
+- `period_ns`: Fixed interval between consecutive samples
+- Sample N has timestamp: `timestamp_ns + (N * period_ns)`
+
+**Values packing**: Each sample vector contains values in schema field order, packed with no padding. Consumer uses schema to determine offsets and sizes.
+
+### Wire Format Example
+
+**Schema** for a 3-channel voltage monitor:
+
+| Field | Name | Type | Unit |
+|-------|------|------|------|
+| 0 | "ch0_voltage" | f32 | "V" |
+| 1 | "ch1_voltage" | f32 | "V" |
+| 2 | "ch2_voltage" | f32 | "V" |
+
+**Data message** with 2 samples, 1ms apart:
+
+```
+msg_type:     0x02
+schema_id:    0x1A2B3C4D
+timestamp_ns: 1704067200000000000  (first sample)
+period_ns:    1000000              (1ms = 1,000,000ns)
+sample_count: 2
+samples[0]:   [3.30, 5.02, 12.1]   (12 bytes: 3x f32)
+samples[1]:   [3.29, 5.01, 12.0]   (12 bytes: 3x f32)
+```
+
+Total data payload: 1 + 4 + 8 + 8 + 2 + 24 = 47 bytes for 6 measurements.
+
+### Consumer Behavior
+
+1. Subscribe to source's NATS subject
+2. Wait for schema message (msg_type = 0x01)
+3. Parse schema, build field index (name → offset mapping)
+4. Process data messages:
+   - Validate schema_id matches
+   - Extract only needed fields by calculated offset
+   - Compute per-sample timestamps from base + (index × period)
+5. Handle schema_id mismatch:
+   - Discard data messages until new schema received
+   - Log warning (producer may have restarted)
+
+### Producer Behavior
+
+1. Define schema at startup (fields, types, units)
+2. Compute schema_id (CRC32)
+3. Publish schema message
+4. Start periodic timer (1 second) to republish schema
+5. Publish data messages as samples are acquired
+6. Schema must not change during producer lifetime
+
+### Python Types
+
+```python
+@dataclass(frozen=True)
+class StreamField:
+    """Definition of a single field in a stream schema."""
+    name: str
+    dtype: DataType              # Enum of type codes
+    unit: str = ""
+
+@dataclass(frozen=True)
+class StreamSchema:
+    """Schema defining the structure of a data stream."""
+    source_id: SourceId
+    fields: tuple[StreamField, ...]
+    schema_id: int = field(init=False)  # Computed CRC32
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'schema_id', self._compute_crc32())
+
+    def _compute_crc32(self) -> int: ...
+    def to_bytes(self) -> bytes: ...
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "StreamSchema": ...
+
+@dataclass(frozen=True)
+class StreamData:
+    """A batch of time-series samples."""
+    schema_id: int
+    timestamp_ns: int            # First sample timestamp
+    period_ns: int               # Interval between samples
+    samples: tuple[tuple[int | float, ...], ...]  # sample_count × field_count
+
+    def get_timestamp(self, sample_index: int) -> int:
+        """Get timestamp for sample at given index."""
+        return self.timestamp_ns + (sample_index * self.period_ns)
+
+    def to_bytes(self, schema: StreamSchema) -> bytes: ...
+
+    @classmethod
+    def from_bytes(cls, data: bytes, schema: StreamSchema) -> "StreamData": ...
+```
+
+### Interfaces
+
+```python
+class StreamPublisher(Protocol):
+    """Interface for publishing streaming data."""
+
+    @property
+    def schema(self) -> StreamSchema:
+        """The schema for this stream."""
+        ...
+
+    async def publish(self, data: StreamData) -> None:
+        """Publish a data message."""
+        ...
+
+    async def start(self) -> None:
+        """Start the publisher (connects and begins schema broadcast)."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop the publisher."""
+        ...
+
+
+class StreamSubscriber(Protocol):
+    """Interface for subscribing to streaming data."""
+
+    async def subscribe(self, source_id: SourceId) -> None:
+        """Subscribe to a stream source."""
+        ...
+
+    async def get_schema(self) -> StreamSchema:
+        """Get the schema (waits for schema message if needed)."""
+        ...
+
+    def data(self) -> AsyncIterator[StreamData]:
+        """Async iterator over data messages."""
+        ...
+
+    async def unsubscribe(self) -> None:
+        """Unsubscribe from the stream."""
+        ...
+```
