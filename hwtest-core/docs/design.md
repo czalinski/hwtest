@@ -79,6 +79,137 @@ telemetry.instrument.dmm01.ch1    # Channel 1 stream
 telemetry.instrument.scope01.ch0  # Different instrument
 ```
 
+### Instrument Class Hierarchy
+
+`Instrument` is an abstract base class. Specific instrument types derive from it:
+
+```
+Instrument (ABC)
+├── ReadOnlyInstrument
+│   ├── DMM (Digital Multimeter)
+│   ├── TemperatureSensor
+│   └── ...
+└── CommandableInstrument
+    ├── PSU (Power Supply Unit)
+    ├── FunctionGenerator
+    └── ...
+```
+
+### Instrument Categories
+
+#### Read-Only Instruments
+
+Instruments that only produce measurements (e.g., DMMs, temperature sensors):
+
+- Start up and immediately begin publishing telemetry
+- No command channel
+- Each channel publishes measurement data via streaming protocol
+
+```
+┌─────────────────────────────────────────┐
+│         Read-Only Instrument            │
+│  ┌─────────────┐    ┌─────────────┐    │
+│  │  Channel 0  │    │  Channel 1  │    │
+│  └──────┬──────┘    └──────┬──────┘    │
+└─────────┼───────────────────┼──────────┘
+          │                   │
+          ▼                   ▼
+    Telemetry Out       Telemetry Out
+```
+
+#### Commandable Instruments
+
+Instruments that accept control commands (e.g., PSUs, function generators):
+
+- Subscribe to a command channel for control inputs
+- Publish telemetry for each channel (including commanded state)
+- Commands affect instrument behavior (e.g., set voltage output)
+
+```
+┌─────────────────────────────────────────┐
+│       Commandable Instrument            │
+│  ┌─────────────┐    ┌─────────────┐    │
+│  │  Channel 0  │    │  Channel 1  │    │
+│  └──────┬──────┘    └──────┬──────┘    │
+│         │                   │          │
+│    ┌────┴────┐         ┌────┴────┐     │
+│    │ Command │         │ Command │     │
+│    │ Handler │         │ Handler │     │
+│    └────┬────┘         └────┬────┘     │
+└─────────┼───────────────────┼──────────┘
+          │                   │
+    ┌─────┴─────┐       ┌─────┴─────┐
+    ▼           ▼       ▼           ▼
+Command In  Telemetry  Command In  Telemetry
+            Out                    Out
+```
+
+### Command and Telemetry Value Model
+
+For commandable instruments, each controllable parameter produces three related values in telemetry:
+
+| Value Type | Description | Example |
+|------------|-------------|---------|
+| **desired** | The value requested by the command | 4.999 V |
+| **actual_set** | The value the instrument actually set (limited by precision) | 5.000 V |
+| **measured** | The physical value currently observed (affected by load, limits) | 2.000 V |
+
+#### Example: PSU Voltage Control
+
+```
+Command: set_voltage(channel=0, voltage=4.999)
+
+Telemetry output for channel 0:
+┌────────────────────────────────────────────────────────────┐
+│  voltage_desired:  4.999 V   (exact command echo)          │
+│  voltage_set:      5.000 V   (instrument precision limit)  │
+│  voltage_measured: 2.000 V   (current-limited output)      │
+│  current_measured: 1.000 A   (at current limit)            │
+└────────────────────────────────────────────────────────────┘
+```
+
+This three-value model enables:
+- **Command verification**: Confirm the instrument received the command
+- **Precision awareness**: Detect when instrument precision differs from requested
+- **Fault detection**: Identify when physical output differs from set point (e.g., current limiting, short circuit, open load)
+
+#### Telemetry Field Naming Convention
+
+For commandable parameters, telemetry fields follow this naming pattern:
+
+```
+{parameter}_desired    # Commanded value
+{parameter}_set        # Actual instrument setting
+{parameter}_measured   # Physical measurement
+```
+
+Example schema for a PSU channel:
+```python
+StreamSchema(
+    source_id=SourceId("psu01.ch0"),
+    fields=(
+        StreamField("voltage_desired", DataType.F32, "V"),
+        StreamField("voltage_set", DataType.F32, "V"),
+        StreamField("voltage_measured", DataType.F32, "V"),
+        StreamField("current_desired", DataType.F32, "A"),
+        StreamField("current_set", DataType.F32, "A"),
+        StreamField("current_measured", DataType.F32, "A"),
+        StreamField("output_enabled", DataType.U8, ""),
+    ),
+)
+```
+
+### Command Channel
+
+Commandable instruments subscribe to a command channel for control messages:
+
+```
+command.instrument.psu01.ch0    # Commands for PSU channel 0
+command.instrument.psu01.ch1    # Commands for PSU channel 1
+```
+
+Command message format and specific command types are defined per instrument class (e.g., PSU interface specification).
+
 ### Instrument Interface
 
 Instrument drivers (implemented outside hwtest-core) should expose:
@@ -87,6 +218,12 @@ Instrument drivers (implemented outside hwtest-core) should expose:
 - Channel configuration/capabilities
 - Per-channel StreamPublisher for telemetry output
 - Initialization/shutdown lifecycle
+
+For commandable instruments, additionally:
+
+- Per-channel command subscriber
+- Command validation and execution
+- Error reporting for invalid commands
 
 ## Components
 
