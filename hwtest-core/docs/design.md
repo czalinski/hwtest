@@ -225,6 +225,131 @@ For commandable instruments, additionally:
 - Command validation and execution
 - Error reporting for invalid commands
 
+## Test Rack
+
+A **TestRack** is a concrete class representing a physical collection of instruments and components. It serves as the intermediary between test case software and the hardware.
+
+### Role in Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          Test Case Software                              │
+└───────────────────────────────────┬─────────────────────────────────────┘
+                                    │
+                          Commands / State Changes
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         TestRack Service                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
+│  │    PSU      │  │    DMM      │  │   Scope     │  │   Sensor    │    │
+│  │  (BK Prec)  │  │  (Keysight) │  │  (Rigol)    │  │  (Custom)   │    │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘    │
+└─────────┼────────────────┼────────────────┼────────────────┼───────────┘
+          │                │                │                │
+          ▼                ▼                ▼                ▼
+    Physical Hardware (USB, GPIB, Serial, Ethernet, etc.)
+```
+
+### YAML Configuration
+
+A test rack is defined via a YAML configuration file that specifies:
+
+- Rack identification
+- List of instruments with their configuration
+- Connection parameters for each instrument
+- Channel-specific settings
+
+#### Example Configuration
+
+```yaml
+rack:
+  id: "rack-01"
+  name: "HALT Chamber Rack A"
+  description: "Primary test rack for thermal/vibration testing"
+
+instruments:
+  - id: "psu01"
+    type: "bk_precision_9140"
+    connection:
+      interface: "usb"
+      port: "/dev/ttyUSB0"
+      baudrate: 57600
+    channels:
+      - id: 0
+        name: "DUT_3V3"
+        voltage_limit: 3.6
+        current_limit: 2.0
+      - id: 1
+        name: "DUT_5V"
+        voltage_limit: 5.5
+        current_limit: 3.0
+      - id: 2
+        name: "DUT_12V"
+        voltage_limit: 13.0
+        current_limit: 5.0
+
+  - id: "dmm01"
+    type: "keysight_34461a"
+    connection:
+      interface: "ethernet"
+      address: "192.168.1.100"
+    channels:
+      - id: 0
+        name: "DUT_VOLTAGE"
+        mode: "dc_voltage"
+        range: "10V"
+
+  - id: "temp01"
+    type: "thermocouple_reader"
+    connection:
+      interface: "serial"
+      port: "/dev/ttyUSB1"
+    channels:
+      - id: 0
+        name: "CHAMBER_TEMP"
+      - id: 1
+        name: "DUT_TEMP"
+```
+
+### TestRack Lifecycle
+
+1. **Load Configuration**: Parse YAML file, validate structure
+2. **Initialize Instruments**: Create instrument instances with configuration
+3. **Connect**: Establish connections to all instruments
+4. **Start Telemetry**: Begin publishing from all channels
+5. **Run**: Process commands, publish telemetry (runs as service)
+6. **Shutdown**: Stop telemetry, disconnect instruments, cleanup
+
+### TestRack as a Service
+
+The TestRack runs as an independent service process:
+
+- **Single process per rack**: One service manages all instruments in a rack
+- **Telemetry aggregation**: All instrument channels publish to NATS
+- **Command routing**: Incoming commands routed to appropriate instrument/channel
+- **Health monitoring**: Track instrument connectivity and errors
+- **Graceful shutdown**: Clean disconnect on service termination
+
+### NATS Subject Hierarchy
+
+With the rack as service, subjects follow this pattern:
+
+```
+telemetry.rack.{rack_id}.{instrument_id}.{channel_id}
+command.rack.{rack_id}.{instrument_id}.{channel_id}
+status.rack.{rack_id}                                  # Rack health/status
+status.rack.{rack_id}.{instrument_id}                  # Instrument status
+```
+
+Example:
+```
+telemetry.rack.rack-01.psu01.ch0      # PSU channel 0 telemetry
+command.rack.rack-01.psu01.ch0        # PSU channel 0 commands
+status.rack.rack-01                    # Rack-01 overall status
+status.rack.rack-01.dmm01              # DMM instrument status
+```
+
 ## Components
 
 ```
