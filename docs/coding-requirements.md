@@ -12,8 +12,26 @@ Requirements for all code in this repository.
 ### Style
 
 - Follow PEP 8
-- Use type hints for all function signatures
 - Maximum line length: 100 characters
+
+### Formatting
+
+- **black**: All code must be formatted with black
+  - Line length: 100 (`black --line-length 100`)
+  - Run before every commit
+
+### Linting
+
+- **pylint**: All code must pass pylint with no errors
+  - Warnings should be minimized
+  - Disabled rules must be justified with inline comments
+
+### Type Hints
+
+- **Full type coverage**: All functions, methods, and variables with non-obvious types must have type hints
+- **mypy strict mode**: Code must pass `mypy --strict` with no errors
+- Use `from __future__ import annotations` for modern annotation syntax
+- Prefer built-in generics (`list`, `dict`) over `typing` module equivalents
 
 ### Testing
 

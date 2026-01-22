@@ -29,6 +29,8 @@ dev = [
     "pytest-cov>=4.0",
     "mypy>=1.0",
     "ruff>=0.1.0",
+    "black>=24.0",
+    "pylint>=3.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -50,3 +52,19 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.pylint.main]
+py-version = "3.10"
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint."messages control"]
+disable = [
+    "too-few-public-methods",  # Dataclasses often have few methods
+    "duplicate-code",          # Re-exports in __init__.py are intentional
+]
