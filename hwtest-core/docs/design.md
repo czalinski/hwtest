@@ -350,6 +350,186 @@ status.rack.rack-01                    # Rack-01 overall status
 status.rack.rack-01.dmm01              # DMM instrument status
 ```
 
+## Test Case
+
+A **TestCase** is an abstract base class that specific test implementations derive from. Each test case is configured via a YAML file that defines its parameters and target test rack.
+
+### Test Case Class Hierarchy
+
+```
+TestCase (ABC)
+├── HaltTestCase
+│   ├── ThermalCycleTest
+│   ├── VibrationTest
+│   └── CombinedStressTest
+├── HassTestCase
+│   ├── BurnInTest
+│   └── ProductionScreening
+└── FunctionalTestCase
+    ├── PowerOnTest
+    ├── CalibrationTest
+    └── ...
+```
+
+### Relationship to Test Rack
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Test Case                                      │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  YAML Configuration                                              │    │
+│  │  - rack_id: "rack-01"  ──────────────────────┐                  │    │
+│  │  - parameters: { boot_delay: 5.0, ... }      │                  │    │
+│  └──────────────────────────────────────────────┼──────────────────┘    │
+└─────────────────────────────────────────────────┼────────────────────────┘
+                                                  │
+                                                  ▼
+                              ┌─────────────────────────────────────┐
+                              │       TestRack Service (rack-01)    │
+                              │  PSU | DMM | Scope | Sensors | ...  │
+                              └─────────────────────────────────────┘
+```
+
+### YAML Configuration
+
+Each test case has a YAML file specifying:
+
+- Test case identification and metadata
+- Reference to the target test rack
+- Tunable parameters specific to the DUT and test requirements
+- Environmental state definitions and thresholds
+
+#### Example Configuration
+
+```yaml
+test_case:
+  id: "thermal-cycle-001"
+  name: "Thermal Cycle Test"
+  description: "Standard thermal cycling test for production units"
+  type: "ThermalCycleTest"
+
+rack:
+  id: "rack-01"
+
+parameters:
+  # Timing parameters (tuned based on DUT characteristics)
+  boot_delay_seconds: 5.0
+  stabilization_time_seconds: 30.0
+  measurement_interval_seconds: 1.0
+
+  # DUT-specific values
+  dut_voltage: 3.3
+  dut_current_limit: 1.5
+
+  # Test limits
+  min_temperature: -40.0
+  max_temperature: 85.0
+  cycles: 10
+  dwell_time_minutes: 15
+
+environmental_states:
+  - id: "room"
+    name: "Room Temperature"
+    description: "Ambient conditions"
+    is_transition: false
+
+  - id: "cold_transition"
+    name: "Cooling Down"
+    is_transition: true
+
+  - id: "cold"
+    name: "Cold Soak"
+    description: "Minimum temperature dwell"
+    is_transition: false
+
+  - id: "hot_transition"
+    name: "Heating Up"
+    is_transition: true
+
+  - id: "hot"
+    name: "Hot Soak"
+    description: "Maximum temperature dwell"
+    is_transition: false
+
+thresholds:
+  room:
+    dut_voltage:
+      low: 3.2
+      high: 3.4
+    dut_current:
+      high: 0.5
+
+  cold:
+    dut_voltage:
+      low: 3.1
+      high: 3.5
+    dut_current:
+      high: 0.6
+
+  hot:
+    dut_voltage:
+      low: 3.0
+      high: 3.6
+    dut_current:
+      high: 0.8
+```
+
+### Tunable Parameters
+
+Parameters are values that test engineers adjust as they learn DUT characteristics:
+
+| Parameter Type | Description | Examples |
+|---------------|-------------|----------|
+| **Timing** | Delays, intervals, durations | `boot_delay_seconds`, `stabilization_time` |
+| **Electrical** | Voltage, current settings | `dut_voltage`, `current_limit` |
+| **Environmental** | Temperature, vibration levels | `min_temperature`, `max_temperature` |
+| **Test limits** | Pass/fail criteria | `max_cycles`, `dwell_time` |
+
+These parameters:
+- Are loaded at test case startup
+- Can be modified between test runs (edit YAML)
+- Are not changed dynamically during a test execution
+
+### Test Case Lifecycle
+
+1. **Load Configuration**: Parse YAML, validate parameters
+2. **Connect to Rack**: Establish connection to the referenced TestRack service
+3. **Initialize**: Set up monitors, configure thresholds per environmental state
+4. **Execute**: Run test logic, control instruments via rack, manage state transitions
+5. **Monitor**: Continuously evaluate telemetry against state-dependent thresholds
+6. **Complete**: Record results, generate report
+7. **Cleanup**: Release rack resources, disconnect
+
+### Test Case Interface
+
+Test case implementations must provide:
+
+```python
+class TestCase(ABC):
+    """Abstract base class for test cases."""
+
+    @abstractmethod
+    async def setup(self) -> None:
+        """Initialize test case, connect to rack."""
+        ...
+
+    @abstractmethod
+    async def execute(self) -> TestResult:
+        """Run the test logic."""
+        ...
+
+    @abstractmethod
+    async def teardown(self) -> None:
+        """Cleanup after test completion."""
+        ...
+
+    @property
+    @abstractmethod
+    def parameters(self) -> dict[str, Any]:
+        """Return current test parameters."""
+        ...
+```
+
 ## Components
 
 ```
