@@ -21,6 +21,73 @@ Provide core data types and interface definitions for the hwtest ecosystem. This
 - Hardware-specific implementations
 - Instrument drivers
 
+## Instruments
+
+Test instruments are the primary data sources in the hwtest ecosystem. This section defines the conceptual model for instruments.
+
+### Instrument Model
+
+An instrument represents a physical test device (multimeter, oscilloscope, power supply, temperature sensor, etc.) with one or more measurement or control channels.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Instrument                           │
+│  ┌─────────────┐  ┌─────────────┐       ┌─────────────┐    │
+│  │  Channel 0  │  │  Channel 1  │  ...  │  Channel N  │    │
+│  │  (stream)   │  │  (stream)   │       │  (stream)   │    │
+│  └──────┬──────┘  └──────┬──────┘       └──────┬──────┘    │
+└─────────┼────────────────┼─────────────────────┼───────────┘
+          │                │                     │
+          ▼                ▼                     ▼
+    Schema + Data    Schema + Data         Schema + Data
+     (telemetry)      (telemetry)           (telemetry)
+```
+
+### Channel Configuration
+
+Instruments vary in how their channels are configured:
+
+| Configuration Type | Description | Examples |
+|-------------------|-------------|----------|
+| **Fixed** | Hardware-defined channels and modes | 4-channel oscilloscope, 6.5-digit DMM |
+| **Software-configurable** | Channels/modes set via software API | Modular DAQ, programmable MUX |
+| **Hardware-configurable** | Physical switches/jumpers, but detectable via software | DIP-switch selected ranges |
+
+### Configuration Constraints
+
+- **Initialization only**: Channel configuration occurs at service startup
+- **No dynamic changes**: Configuration cannot be modified while the service is running
+- **Detection at startup**: For hardware-configurable instruments, the service detects the current configuration at initialization
+
+This constraint simplifies the system design:
+- Schemas are defined once at startup and do not change
+- Consumers can cache schema information
+- No need to handle mid-stream configuration changes
+
+### Telemetry Streams
+
+Each channel produces an independent telemetry stream using the streaming data protocol (see [Streaming Data Protocol](#streaming-data-protocol)):
+
+1. **Schema message**: Sent at startup and every 1 second, defines the channel's data format
+2. **Data messages**: Continuous stream of samples with timestamps
+
+Multiple channels from the same instrument may share a NATS subject prefix but have distinct stream identifiers:
+
+```
+telemetry.instrument.dmm01.ch0    # Channel 0 stream
+telemetry.instrument.dmm01.ch1    # Channel 1 stream
+telemetry.instrument.scope01.ch0  # Different instrument
+```
+
+### Instrument Interface
+
+Instrument drivers (implemented outside hwtest-core) should expose:
+
+- List of available channels
+- Channel configuration/capabilities
+- Per-channel StreamPublisher for telemetry output
+- Initialization/shutdown lifecycle
+
 ## Components
 
 ```
