@@ -350,6 +350,122 @@ status.rack.rack-01                    # Rack-01 overall status
 status.rack.rack-01.dmm01              # DMM instrument status
 ```
 
+### Channel Aliasing
+
+Test cases should refer to channels by **logical purpose** rather than physical instrument/channel identifiers. This decouples test logic from specific hardware configuration.
+
+#### Problem
+
+Without aliasing, test cases are tightly coupled to hardware:
+
+```python
+# Bad: Test case knows physical mapping
+await rack.send_command("psu01", "ch2", SetVoltage(3.3))
+voltage = await rack.get_telemetry("dmm01", "ch0")
+```
+
+If the rack is rewired or a different PSU is used, the test case must change.
+
+#### Solution: Logical Channel Names
+
+Test cases use logical names that describe purpose:
+
+```python
+# Good: Test case uses logical names
+await rack.send_command("dut_power", SetVoltage(3.3))
+voltage = await rack.get_telemetry("dut_voltage_monitor")
+```
+
+#### Mapping in Test Rack YAML
+
+The test rack configuration defines the physical-to-logical mapping:
+
+```yaml
+rack:
+  id: "rack-01"
+  name: "HALT Chamber Rack A"
+
+instruments:
+  - id: "psu01"
+    type: "bk_precision_9140"
+    connection:
+      interface: "usb"
+      port: "/dev/ttyUSB0"
+    channels:
+      - id: 0
+        alias: "dut_3v3"           # Logical name
+        voltage_limit: 3.6
+      - id: 1
+        alias: "dut_5v"            # Logical name
+        voltage_limit: 5.5
+      - id: 2
+        alias: "dut_power"         # Logical name
+        voltage_limit: 13.0
+
+  - id: "dmm01"
+    type: "keysight_34461a"
+    connection:
+      interface: "ethernet"
+      address: "192.168.1.100"
+    channels:
+      - id: 0
+        alias: "dut_voltage_monitor"  # Logical name
+```
+
+#### Implementation: Rack Provides Publish Topic
+
+To keep instrument code simple, the rack provides each channel with its publish topic at initialization:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         TestRack Initialization                          │
+│                                                                         │
+│  1. Load YAML config                                                    │
+│  2. For each instrument channel:                                        │
+│     - Determine publish topic using alias                               │
+│     - Pass topic to instrument at initialization                        │
+│                                                                         │
+│  Instrument receives:                                                   │
+│    channel_id: 0                                                        │
+│    publish_topic: "telemetry.rack.rack-01.dut_3v3"    ← alias-based    │
+│    command_topic: "command.rack.rack-01.dut_3v3"                        │
+│                                                                         │
+│  Instrument simply publishes to the provided topic.                     │
+│  No aliasing logic in instrument code.                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Benefits
+
+| Concern | Solution |
+|---------|----------|
+| **Instrument code complexity** | None - instrument just publishes to provided topic |
+| **Latency** | Zero - no republishing or middleware |
+| **Test case portability** | Test cases use logical names, work with any rack |
+| **Rewiring flexibility** | Change YAML alias, not test code |
+
+#### NATS Subjects with Aliasing
+
+With aliasing, subjects use logical names:
+
+```
+telemetry.rack.rack-01.dut_power          # Was psu01.ch2
+telemetry.rack.rack-01.dut_voltage_monitor # Was dmm01.ch0
+command.rack.rack-01.dut_power            # Commands to PSU channel
+```
+
+#### Fallback: Physical Names
+
+If no alias is defined, the channel uses the physical naming convention:
+
+```yaml
+channels:
+  - id: 0
+    # No alias defined - uses "psu01.ch0"
+```
+
+This allows gradual adoption and debugging with physical names when needed.
+
 ## Test Case
 
 A **TestCase** is an abstract base class that specific test implementations derive from. Each test case is configured via a YAML file that defines its parameters and target test rack.
