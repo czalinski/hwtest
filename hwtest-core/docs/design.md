@@ -646,6 +646,181 @@ class TestCase(ABC):
         ...
 ```
 
+## Loggers
+
+Loggers are responsible for reading telemetry data and persisting it to storage. They are instantiated during test case initialization and configured via the test case YAML.
+
+### Logger Class Hierarchy
+
+```
+Logger (ABC)
+├── CsvLogger
+│   └── Writes one CSV file per topic
+└── InfluxDbLogger
+    └── Writes to InfluxDB time-series database
+```
+
+### Logger Configuration in Test Case YAML
+
+Loggers are defined in the test case configuration:
+
+```yaml
+test_case:
+  id: "thermal-cycle-001"
+  name: "Thermal Cycle Test"
+  type: "HaltTest"
+
+rack:
+  id: "rack-01"
+
+loggers:
+  - type: "csv"
+    output_dir: "/data/logs"
+
+  - type: "influxdb"
+    url: "http://localhost:8086"
+    org: "hwtest"
+    bucket: "telemetry"
+    token_env: "INFLUXDB_TOKEN"   # Read token from environment variable
+
+# ... rest of test case config
+```
+
+### Topics and Tags
+
+The test case provides loggers with:
+
+1. **Topics**: List of telemetry topics to subscribe to and log
+2. **Tags**: Metadata for organizing and querying logged data
+
+#### Tags
+
+| Tag | Description | Example |
+|-----|-------------|---------|
+| `test_run_id` | Unique identifier for this test run | `"run-2024-01-15-143052"` |
+| `test_run_start` | ISO timestamp of test start | `"2024-01-15T14:30:52Z"` |
+| `test_case_id` | Test case identifier | `"thermal-cycle-001"` |
+| `test_case_name` | Human-readable test name | `"Thermal Cycle Test"` |
+| `test_type` | Category of test | `"HALT"`, `"HASS"`, `"functional"` |
+| `rack_id` | Test rack identifier | `"rack-01"` |
+| `dut_serial` | Device under test serial number | `"SN12345"` |
+
+### CSV Logger
+
+The CSV logger creates one file per topic, organized in folders by tags:
+
+```
+{output_dir}/
+└── {test_type}/
+    └── {test_case_id}/
+        └── {test_run_id}/
+            ├── dut_power.csv
+            ├── dut_voltage_monitor.csv
+            ├── chamber_temp.csv
+            └── metadata.json       # Tags and test info
+```
+
+#### CSV File Format
+
+Each CSV file contains:
+
+```csv
+timestamp_ns,voltage_desired,voltage_set,voltage_measured,current_measured
+1705329052000000000,3.300,3.300,3.298,0.452
+1705329052001000000,3.300,3.300,3.299,0.451
+1705329052002000000,3.300,3.300,3.297,0.453
+```
+
+- First column is always `timestamp_ns`
+- Remaining columns match the stream schema fields
+- Header row derived from schema field names
+
+#### metadata.json
+
+```json
+{
+  "test_run_id": "run-2024-01-15-143052",
+  "test_run_start": "2024-01-15T14:30:52Z",
+  "test_case_id": "thermal-cycle-001",
+  "test_case_name": "Thermal Cycle Test",
+  "test_type": "HALT",
+  "rack_id": "rack-01",
+  "dut_serial": "SN12345",
+  "topics": [
+    "telemetry.rack.rack-01.dut_power",
+    "telemetry.rack.rack-01.dut_voltage_monitor",
+    "telemetry.rack.rack-01.chamber_temp"
+  ]
+}
+```
+
+### InfluxDB Logger
+
+The InfluxDB logger writes telemetry data as time-series points with tags:
+
+```
+Measurement: telemetry
+Tags:
+  - topic: "dut_power"
+  - test_run_id: "run-2024-01-15-143052"
+  - test_case_id: "thermal-cycle-001"
+  - test_type: "HALT"
+  - rack_id: "rack-01"
+  - dut_serial: "SN12345"
+Fields:
+  - voltage_desired: 3.300
+  - voltage_set: 3.300
+  - voltage_measured: 3.298
+  - current_measured: 0.452
+Timestamp: 1705329052000000000 (nanoseconds)
+```
+
+This enables queries like:
+
+```flux
+from(bucket: "telemetry")
+  |> range(start: -1d)
+  |> filter(fn: (r) => r.test_type == "HALT")
+  |> filter(fn: (r) => r.topic == "dut_power")
+  |> filter(fn: (r) => r._field == "voltage_measured")
+```
+
+### Logger Interface
+
+```python
+class Logger(ABC):
+    """Abstract base class for telemetry loggers."""
+
+    @abstractmethod
+    async def start(self, topics: list[str], tags: dict[str, str]) -> None:
+        """Start logging the specified topics with given tags.
+
+        Args:
+            topics: List of NATS subjects to subscribe to and log.
+            tags: Metadata tags for organizing logged data.
+        """
+        ...
+
+    @abstractmethod
+    async def stop(self) -> None:
+        """Stop logging and flush any buffered data."""
+        ...
+
+    @property
+    @abstractmethod
+    def is_running(self) -> bool:
+        """Return True if the logger is actively logging."""
+        ...
+```
+
+### Logger Lifecycle
+
+1. **Instantiate**: Test case creates logger from YAML config
+2. **Start**: Test case calls `start()` with topics and tags
+3. **Run**: Logger subscribes to topics, writes data as it arrives
+4. **Stop**: Test case calls `stop()` at test completion
+5. **Flush**: Logger ensures all buffered data is written
+
 ## Components
 
 ```
