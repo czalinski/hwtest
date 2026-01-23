@@ -821,6 +821,225 @@ class Logger(ABC):
 4. **Stop**: Test case calls `stop()` at test completion
 5. **Flush**: Logger ensures all buffered data is written
 
+## Monitors
+
+Monitors continuously evaluate telemetry data against specifications and report compliance status. They are instantiated during test case initialization and configured via the test case YAML.
+
+### Monitor Behavior
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Monitor                                     │
+│                                                                         │
+│  Subscribed Topics:                                                     │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐         │
+│  │ dut_power       │  │ dut_temp        │  │ env_state       │         │
+│  │ (telemetry)     │  │ (telemetry)     │  │ (state topic)   │         │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘         │
+│           │                    │                    │                   │
+│           ▼                    ▼                    ▼                   │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                     Field Cache                                  │   │
+│  │  voltage_measured: 3.29    current_measured: 0.45               │   │
+│  │  dut_temp: 25.3            env_state: "room"                    │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │  Evaluation (if env_state is not transitioning)                  │   │
+│  │  - Look up thresholds for current env_state (or use default)    │   │
+│  │  - Check ALL watched fields against their specifications        │   │
+│  │  - ALL fields must be within spec for overall "in spec"         │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    Status Publication                            │   │
+│  │  Topic: monitor.{monitor_id}.status                              │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Monitor Configuration in Test Case YAML
+
+```yaml
+monitors:
+  - id: "power_monitor"
+    description: "Monitors DUT power rail compliance"
+
+    # Topics and fields to watch
+    watch:
+      - topic: "dut_power"
+        fields:
+          - "voltage_measured"
+          - "current_measured"
+      - topic: "dut_temp"
+        fields:
+          - "temperature"
+
+    # Environmental state topic (almost always included)
+    state_topic: "env_state"
+
+    # Default thresholds (used when state-specific not defined)
+    default:
+      voltage_measured:
+        low: 3.1
+        high: 3.5
+      current_measured:
+        high: 1.0
+      temperature:
+        low: -45.0
+        high: 90.0
+
+    # State-specific thresholds (override defaults)
+    states:
+      room:
+        voltage_measured:
+          low: 3.2
+          high: 3.4
+        current_measured:
+          high: 0.5
+
+      cold:
+        voltage_measured:
+          low: 3.1
+          high: 3.5
+        current_measured:
+          high: 0.7
+
+      hot:
+        voltage_measured:
+          low: 3.0
+          high: 3.6
+        current_measured:
+          high: 0.9
+```
+
+### Specification Evaluation
+
+For a monitor to report "in specification":
+
+1. **All watched fields** must be within their defined bounds
+2. Thresholds are selected based on current environmental state:
+   - If state-specific thresholds exist → use them
+   - Otherwise → use default thresholds
+3. **Transition states**: Evaluation is suspended (but field cache is updated)
+
+### Field Cache
+
+Monitors maintain a cache of the most recent value for each watched field:
+
+- **Purpose**: Evaluate against complete data even when messages don't contain all fields
+- **Update**: Cache is updated with every incoming message, even during transitions
+- **Evaluation**: Uses cached values when a message doesn't include a watched field
+
+### Monitor Status Publication
+
+Monitors publish their status to a dedicated topic:
+
+```
+monitor.{monitor_id}.status
+```
+
+#### Status Message Contents
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `monitor_id` | string | Monitor identifier |
+| `timestamp` | u64 | Current timestamp (ns) |
+| `env_state` | string | Current environmental state |
+| `in_spec` | bool | True if all fields within specification |
+| `is_evaluating` | bool | False during transition states |
+| `out_of_spec_duration_ns` | u64 | Time since first out-of-spec (0 if in spec) |
+| `transition_count` | u32 | Number of in-spec → out-of-spec transitions |
+| `violations` | list | Details of which fields are out of spec |
+
+#### Example Status Message
+
+```json
+{
+  "monitor_id": "power_monitor",
+  "timestamp": 1705329052000000000,
+  "env_state": "hot",
+  "in_spec": false,
+  "is_evaluating": true,
+  "out_of_spec_duration_ns": 5000000000,
+  "transition_count": 3,
+  "violations": [
+    {
+      "field": "current_measured",
+      "value": 1.2,
+      "threshold_high": 0.9,
+      "message": "Current exceeds limit for 'hot' state"
+    }
+  ]
+}
+```
+
+### Transition State Handling
+
+When the environmental state is a transition state (`is_transition: true`):
+
+1. **Suspend evaluation**: Do not evaluate fields against thresholds
+2. **Continue caching**: Update field cache with incoming data
+3. **Report status**: Set `is_evaluating: false` in status messages
+4. **Preserve counters**: `transition_count` and timing are preserved
+
+This prevents false failures during temperature ramps, vibration changes, etc.
+
+### Monitor Interface
+
+```python
+class Monitor:
+    """Evaluates telemetry against specifications."""
+
+    def __init__(self, config: MonitorConfig) -> None:
+        """Initialize monitor from configuration."""
+        ...
+
+    async def start(self) -> None:
+        """Start monitoring - subscribe to topics, begin evaluation."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop monitoring."""
+        ...
+
+    @property
+    def monitor_id(self) -> str:
+        """Return the monitor identifier."""
+        ...
+
+    @property
+    def in_spec(self) -> bool:
+        """Return True if currently within specification."""
+        ...
+
+    @property
+    def transition_count(self) -> int:
+        """Return count of in-spec to out-of-spec transitions."""
+        ...
+
+    @property
+    def out_of_spec_duration_ns(self) -> int:
+        """Return duration out of spec in nanoseconds (0 if in spec)."""
+        ...
+
+    def get_field_value(self, field: str) -> float | None:
+        """Return cached value for a field, or None if not yet received."""
+        ...
+```
+
+### Monitor Lifecycle
+
+1. **Instantiate**: Test case creates monitor from YAML config
+2. **Start**: Subscribe to watch topics and state topic
+3. **Run**:
+   - Update field cache with incoming telemetry
+   - Evaluate specifications (unless transitioning)
+   - Publish status on each evaluation
+4. **Stop**: Unsubscribe, publish final status
+
 ## Components
 
 ```
