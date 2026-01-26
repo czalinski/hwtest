@@ -77,7 +77,8 @@ CREATE TABLE requirement_state (
     PRIMARY KEY (requirement_id, environmental_state_id)
 );
 
--- Test runs. Status values:
+-- Test runs. Run type is specified as a command line parameter.
+-- Status values:
 --   'running'    - in progress
 --   'completed'  - ran to completion normally
 --   'terminated' - ended early due to system failure
@@ -85,6 +86,7 @@ CREATE TABLE requirement_state (
 CREATE TABLE test_run (
     id           INTEGER PRIMARY KEY,
     test_case_id INTEGER NOT NULL REFERENCES test_case(id),
+    run_type     TEXT NOT NULL CHECK (run_type IN ('hass', 'halt', 'functional', 'ad_hoc')),
     started_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finished_at  TIMESTAMP,
     status       TEXT NOT NULL DEFAULT 'running'
