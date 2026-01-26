@@ -19,14 +19,22 @@ from hwtest_core.interfaces import (
     ThresholdProvider,
 )
 from hwtest_core.types import (
+    BadInterval,
+    BadValues,
+    BoundCheck,
     BoundType,
     ChannelId,
     DataType,
     EnvironmentalState,
+    GoodInterval,
+    GoodValues,
+    GreaterThan,
+    LessThan,
     MonitorId,
     MonitorResult,
     MonitorVerdict,
     SourceId,
+    Special,
     StateId,
     StateThresholds,
     StateTransition,
@@ -40,6 +48,10 @@ from hwtest_core.types import (
     ThresholdViolation,
     Timestamp,
     ValueQuality,
+    WithinBaseline,
+    WithinRange,
+    WithinTolerance,
+    bound_check_from_dict,
 )
 
 __version__ = "0.1.0"
@@ -70,6 +82,19 @@ __all__ = [
     "StateThresholds",
     "Threshold",
     "ThresholdBound",
+    # Bound check types
+    "BadInterval",
+    "BadValues",
+    "BoundCheck",
+    "GoodInterval",
+    "GoodValues",
+    "GreaterThan",
+    "LessThan",
+    "Special",
+    "WithinBaseline",
+    "WithinRange",
+    "WithinTolerance",
+    "bound_check_from_dict",
     # Monitor types
     "MonitorResult",
     "MonitorVerdict",

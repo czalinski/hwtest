@@ -1,5 +1,19 @@
 """Core data types for hwtest."""
 
+from hwtest_core.types.bounds import (
+    BadInterval,
+    BadValues,
+    BoundCheck,
+    GoodInterval,
+    GoodValues,
+    GreaterThan,
+    LessThan,
+    Special,
+    WithinBaseline,
+    WithinRange,
+    WithinTolerance,
+    bound_check_from_dict,
+)
 from hwtest_core.types.common import (
     ChannelId,
     DataType,
@@ -58,6 +72,19 @@ __all__ = [
     "StateThresholds",
     "Threshold",
     "ThresholdBound",
+    # Bound check types
+    "BadInterval",
+    "BadValues",
+    "BoundCheck",
+    "GoodInterval",
+    "GoodValues",
+    "GreaterThan",
+    "LessThan",
+    "Special",
+    "WithinBaseline",
+    "WithinRange",
+    "WithinTolerance",
+    "bound_check_from_dict",
     # Monitor types
     "MonitorResult",
     "MonitorVerdict",
