@@ -37,8 +37,8 @@ class TestThresholdBound:
     def test_check_low_inclusive(self) -> None:
         """Test checking lower bound (inclusive)."""
         bound = ThresholdBound(value=0.0, bound_type=BoundType.INCLUSIVE)
-        assert bound.check_low(0.0) is True   # Equal, inclusive
-        assert bound.check_low(1.0) is True   # Above
+        assert bound.check_low(0.0) is True  # Equal, inclusive
+        assert bound.check_low(1.0) is True  # Above
         assert bound.check_low(-1.0) is False  # Below
 
     def test_check_low_exclusive(self) -> None:
@@ -51,15 +51,15 @@ class TestThresholdBound:
     def test_check_high_inclusive(self) -> None:
         """Test checking upper bound (inclusive)."""
         bound = ThresholdBound(value=100.0, bound_type=BoundType.INCLUSIVE)
-        assert bound.check_high(100.0) is True   # Equal, inclusive
-        assert bound.check_high(99.0) is True    # Below
+        assert bound.check_high(100.0) is True  # Equal, inclusive
+        assert bound.check_high(99.0) is True  # Below
         assert bound.check_high(101.0) is False  # Above
 
     def test_check_high_exclusive(self) -> None:
         """Test checking upper bound (exclusive)."""
         bound = ThresholdBound(value=100.0, bound_type=BoundType.EXCLUSIVE)
-        assert bound.check_high(100.0) is False   # Equal, exclusive
-        assert bound.check_high(99.999) is True   # Below
+        assert bound.check_high(100.0) is False  # Equal, exclusive
+        assert bound.check_high(99.999) is True  # Below
         assert bound.check_high(100.001) is False  # Above
 
     def test_to_dict(self) -> None:
@@ -118,9 +118,9 @@ class TestThreshold:
             low=ThresholdBound(value=3.0),
             high=ThresholdBound(value=3.6),
         )
-        assert threshold.check(3.0) is True   # At low bound
-        assert threshold.check(3.3) is True   # In middle
-        assert threshold.check(3.6) is True   # At high bound
+        assert threshold.check(3.0) is True  # At low bound
+        assert threshold.check(3.3) is True  # In middle
+        assert threshold.check(3.6) is True  # At high bound
 
     def test_check_out_of_range(self) -> None:
         """Test checking values out of range."""
@@ -166,7 +166,7 @@ class TestThreshold:
             low=ThresholdBound(value=0.0, bound_type=BoundType.EXCLUSIVE),
             high=ThresholdBound(value=10.0, bound_type=BoundType.EXCLUSIVE),
         )
-        assert threshold.check(0.0) is False   # Low bound exclusive
+        assert threshold.check(0.0) is False  # Low bound exclusive
         assert threshold.check(0.001) is True
         assert threshold.check(9.999) is True
         assert threshold.check(10.0) is False  # High bound exclusive

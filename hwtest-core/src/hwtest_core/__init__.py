@@ -29,6 +29,7 @@ from hwtest_core.types import (
     GoodInterval,
     GoodValues,
     GreaterThan,
+    InstrumentIdentity,
     LessThan,
     MonitorId,
     MonitorResult,
@@ -62,6 +63,7 @@ __all__ = [
     # Common types
     "ChannelId",
     "DataType",
+    "InstrumentIdentity",
     "MonitorId",
     "SourceId",
     "StateId",

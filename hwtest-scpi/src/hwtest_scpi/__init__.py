@@ -1,6 +1,6 @@
 """SCPI protocol and PyVISA transport for hwtest."""
 
-from hwtest_scpi.connection import ScpiConnection
+from hwtest_scpi.connection import ScpiConnection, parse_idn_response
 from hwtest_scpi.errors import ScpiCommandError, ScpiError, ScpiInstrumentError
 from hwtest_scpi.number import (
     ScpiSpecial,
@@ -18,6 +18,7 @@ from hwtest_scpi.visa import VisaResource
 __all__ = [
     # Connection
     "ScpiConnection",
+    "parse_idn_response",
     # Errors
     "ScpiCommandError",
     "ScpiError",

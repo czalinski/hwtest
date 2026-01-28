@@ -80,6 +80,26 @@ class DataType(Enum):
 
 
 @dataclass(frozen=True)
+class InstrumentIdentity:
+    """Instrument identification metadata.
+
+    Represents the four standard fields returned by the SCPI ``*IDN?`` query,
+    but is general enough for any instrument type.
+
+    Args:
+        manufacturer: Instrument manufacturer name.
+        model: Instrument model number or name.
+        serial: Serial number string.
+        firmware: Firmware or hardware version string.
+    """
+
+    manufacturer: str
+    model: str
+    serial: str
+    firmware: str
+
+
+@dataclass(frozen=True)
 class Timestamp:
     """High-resolution timestamp with source tracking."""
 

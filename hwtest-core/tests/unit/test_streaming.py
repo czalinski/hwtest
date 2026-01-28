@@ -160,7 +160,7 @@ class TestStreamSchema:
         fields = (
             StreamField(name="a", dtype=DataType.F32),  # 4 bytes
             StreamField(name="b", dtype=DataType.I64),  # 8 bytes
-            StreamField(name="c", dtype=DataType.U8),   # 1 byte
+            StreamField(name="c", dtype=DataType.U8),  # 1 byte
         )
         schema = StreamSchema(source_id=SourceId("s"), fields=fields)
         assert schema.sample_size == 13
@@ -170,7 +170,7 @@ class TestStreamSchema:
         fields = (
             StreamField(name="a", dtype=DataType.I32),  # offset 0, size 4
             StreamField(name="b", dtype=DataType.F64),  # offset 4, size 8
-            StreamField(name="c", dtype=DataType.U8),   # offset 12, size 1
+            StreamField(name="c", dtype=DataType.U8),  # offset 12, size 1
         )
         schema = StreamSchema(source_id=SourceId("s"), fields=fields)
 

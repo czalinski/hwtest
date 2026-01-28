@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from hwtest_core.types.common import DataType, Timestamp
+from hwtest_core.types.common import DataType, InstrumentIdentity, Timestamp
 
 
 class TestDataType:
@@ -73,6 +73,37 @@ class TestDataType:
         assert DataType.F64.is_float is True
         assert DataType.I32.is_float is False
         assert DataType.U64.is_float is False
+
+
+class TestInstrumentIdentity:
+    """Tests for the InstrumentIdentity class."""
+
+    def test_fields(self) -> None:
+        identity = InstrumentIdentity(
+            manufacturer="B&K Precision",
+            model="9115",
+            serial="SN000001",
+            firmware="V1.00-V1.00",
+        )
+        assert identity.manufacturer == "B&K Precision"
+        assert identity.model == "9115"
+        assert identity.serial == "SN000001"
+        assert identity.firmware == "V1.00-V1.00"
+
+    def test_immutable(self) -> None:
+        identity = InstrumentIdentity(manufacturer="Test", model="M1", serial="S1", firmware="F1")
+        with pytest.raises(AttributeError):
+            identity.model = "M2"  # type: ignore[misc]
+
+    def test_equality(self) -> None:
+        a = InstrumentIdentity("Mfr", "Model", "SN1", "FW1")
+        b = InstrumentIdentity("Mfr", "Model", "SN1", "FW1")
+        assert a == b
+
+    def test_inequality(self) -> None:
+        a = InstrumentIdentity("Mfr", "Model", "SN1", "FW1")
+        b = InstrumentIdentity("Mfr", "Model", "SN2", "FW1")
+        assert a != b
 
 
 class TestTimestamp:

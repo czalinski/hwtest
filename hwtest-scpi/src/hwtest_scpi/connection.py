@@ -5,11 +5,47 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from hwtest_core.types.common import InstrumentIdentity
+
 from hwtest_scpi.errors import ScpiCommandError, ScpiInstrumentError
 from hwtest_scpi.number import parse_bool, parse_int, parse_number, parse_numbers
 
 if TYPE_CHECKING:
     from hwtest_scpi.transport import ScpiTransport
+
+
+def parse_idn_response(response: str) -> InstrumentIdentity:
+    """Parse a SCPI ``*IDN?`` response into an :class:`InstrumentIdentity`.
+
+    The standard ``*IDN?`` response format is four comma-separated fields::
+
+        manufacturer,model,serial_number,firmware_version
+
+    If the response contains more than four comma-separated fields, the
+    extra fields are joined into the firmware string.
+
+    Args:
+        response: The raw ``*IDN?`` response string.
+
+    Returns:
+        Parsed identity with manufacturer, model, serial, and firmware.
+
+    Raises:
+        ValueError: If the response has fewer than four fields.
+    """
+    parts = [p.strip() for p in response.split(",")]
+    if len(parts) < 4:
+        raise ValueError(
+            f"Expected at least 4 comma-separated fields in *IDN? response, "
+            f"got {len(parts)}: {response!r}"
+        )
+    return InstrumentIdentity(
+        manufacturer=parts[0],
+        model=parts[1],
+        serial=parts[2],
+        firmware=",".join(parts[3:]),
+    )
+
 
 # Matches SCPI error responses: optional +/- code, comma, optional quoted message.
 _ERROR_RE = re.compile(r"^\s*([+-]?\d+)\s*,\s*\"?([^\"]*)\"?\s*$")
@@ -120,6 +156,15 @@ class ScpiConnection:
     def identify(self) -> str:
         """Query the instrument identification string (``*IDN?``)."""
         return self.query("*IDN?")
+
+    def get_identity(self) -> InstrumentIdentity:
+        """Query and parse the instrument identification (``*IDN?``).
+
+        Returns:
+            Parsed :class:`InstrumentIdentity` with manufacturer, model,
+            serial number, and firmware version.
+        """
+        return parse_idn_response(self.identify())
 
     def reset(self) -> None:
         """Send a reset command (``*RST``)."""

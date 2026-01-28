@@ -6,7 +6,9 @@ from collections import deque
 
 import pytest
 
-from hwtest_scpi.connection import ScpiConnection
+from hwtest_core.types.common import InstrumentIdentity
+
+from hwtest_scpi.connection import ScpiConnection, parse_idn_response
 from hwtest_scpi.errors import ScpiCommandError, ScpiInstrumentError
 
 # ---------------------------------------------------------------------------
@@ -261,3 +263,64 @@ class TestScpiCommandErrorFormatting:
         msg = str(err)
         assert "-100" in msg
         assert "-200" in msg
+
+
+# ---------------------------------------------------------------------------
+# parse_idn_response
+# ---------------------------------------------------------------------------
+
+
+class TestParseIdnResponse:
+    """Tests for parse_idn_response."""
+
+    def test_standard_four_fields(self) -> None:
+        result = parse_idn_response("B&K Precision,9115,SN000001,V1.00-V1.00")
+        assert result == InstrumentIdentity(
+            manufacturer="B&K Precision",
+            model="9115",
+            serial="SN000001",
+            firmware="V1.00-V1.00",
+        )
+
+    def test_strips_whitespace(self) -> None:
+        result = parse_idn_response(" Keysight , 34465A , SN123 , 1.0.0 ")
+        assert result.manufacturer == "Keysight"
+        assert result.model == "34465A"
+        assert result.serial == "SN123"
+        assert result.firmware == "1.0.0"
+
+    def test_extra_fields_joined_as_firmware(self) -> None:
+        result = parse_idn_response("Mfr,Model,SN1,FW1,FW2,FW3")
+        assert result.firmware == "FW1,FW2,FW3"
+
+    def test_too_few_fields_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least 4"):
+            parse_idn_response("Only,Two,Fields")
+
+    def test_empty_string_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least 4"):
+            parse_idn_response("")
+
+
+# ---------------------------------------------------------------------------
+# get_identity
+# ---------------------------------------------------------------------------
+
+
+class TestGetIdentity:
+    """Tests for ScpiConnection.get_identity."""
+
+    def test_returns_parsed_identity(self) -> None:
+        transport = MockTransport(["ACME,Widget,SN42,2.1.0", _no_error()])
+        conn = ScpiConnection(transport)
+        identity = conn.get_identity()
+        assert identity.manufacturer == "ACME"
+        assert identity.model == "Widget"
+        assert identity.serial == "SN42"
+        assert identity.firmware == "2.1.0"
+
+    def test_sends_idn_query(self) -> None:
+        transport = MockTransport(["Mfr,Model,SN,FW", _no_error()])
+        conn = ScpiConnection(transport)
+        conn.get_identity()
+        assert transport.written[0] == "*IDN?"

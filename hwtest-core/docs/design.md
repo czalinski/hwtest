@@ -210,14 +210,35 @@ command.instrument.psu01.ch1    # Commands for PSU channel 1
 
 Command message format and specific command types are defined per instrument class (e.g., PSU interface specification).
 
+### Instrument Identity
+
+Every instrument must provide identity metadata so the test rack can verify it is communicating with the correct device. Identity is represented by `InstrumentIdentity` (defined in `hwtest_core.types.common`):
+
+```python
+@dataclass(frozen=True)
+class InstrumentIdentity:
+    manufacturer: str   # e.g. "B&K Precision"
+    model: str          # e.g. "9115"
+    serial: str         # e.g. "SN000001"
+    firmware: str       # e.g. "V1.00-V1.00"
+```
+
+For SCPI instruments, this maps directly to the four comma-separated fields of the `*IDN?` response. The `hwtest-scpi` package provides `parse_idn_response()` and `ScpiConnection.get_identity()` to parse these automatically.
+
 ### Instrument Interface
 
-Instrument drivers (implemented outside hwtest-core) should expose:
+Instrument drivers (implemented outside hwtest-core) must expose:
+
+#### Required
+
+- **`get_identity() -> InstrumentIdentity`**: Return the instrument's identity metadata. Called by the test rack at initialization to verify the correct instrument is connected.
+- **`close() -> None`**: Release resources (connections, file handles, etc.).
+
+#### Expected for telemetry instruments
 
 - List of available channels
 - Channel configuration/capabilities
 - Per-channel StreamPublisher for telemetry output
-- Initialization/shutdown lifecycle
 
 For commandable instruments, additionally:
 
@@ -225,9 +246,69 @@ For commandable instruments, additionally:
 - Command validation and execution
 - Error reporting for invalid commands
 
+### Instrument Entry Points
+
+Each instrument package provides two standard entry points: a **factory function** for programmatic use and a **CLI** for standalone operation.
+
+#### Factory Function
+
+Every instrument package exports a `create_instrument()` function as the standard programmatic entry point. This is what the test rack calls after dynamic loading, and what unit tests can call directly without subprocess overhead.
+
+```python
+# hwtest_bkprecision/psu.py
+def create_instrument(visa_address: str) -> BkDcPsu:
+    """Create a BK Precision PSU driver from a VISA address."""
+    resource = VisaResource(visa_address)
+    resource.open()
+    conn = ScpiConnection(resource)
+    return BkDcPsu(conn)
+```
+
+The function signature varies per instrument type but follows these conventions for standard parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `visa_address` | `str` | VISA resource string (SCPI instruments) |
+| `sample_period` | `float` | Measurement polling interval in seconds (polling instruments like DMMs) |
+
+Additional instrument-specific kwargs are passed through from the rack YAML configuration.
+
+#### Command-Line Interface
+
+Each instrument package also provides a CLI entry point for standalone operation (debugging, manual testing, development). The CLI uses standard argument names for common parameters:
+
+| Argument | Description |
+|----------|-------------|
+| `--visa-address` | VISA resource string |
+| `--sample-period` | Polling interval in seconds |
+
+The CLI calls the same factory function internally, ensuring consistent behavior between programmatic and command-line usage.
+
+### Communication Model
+
+Instruments communicate through two distinct channels:
+
+#### Messaging Protocol (NATS) — Operational Data
+
+During normal operation, **all telemetry and commands** flow through the NATS messaging protocol. This ensures:
+
+- All operational data is captured by loggers for post-test fault analysis
+- Consistent timestamping across sources
+- Decoupled producers and consumers
+- No data loss when something goes wrong — the messaging log provides a complete record
+
+#### Direct Function Calls — Initialization Metadata
+
+A small set of **metadata exchanges at initialization time** use direct function calls rather than messaging:
+
+- **Identity verification**: `instrument.get_identity()` — the rack calls this to confirm the correct instrument is connected before starting telemetry
+- **Configuration queries**: Channel count, capabilities, firmware-specific features
+
+These are synchronous, request-response interactions that occur once at startup. They do not need to be captured by telemetry loggers since they are not operational data — they are structural metadata about the test setup itself.
+
 ## Test Rack
 
-A **TestRack** is a concrete class representing a physical collection of instruments and components. It serves as the intermediary between test case software and the hardware.
+A **TestRack** is a concrete class representing a physical collection of instruments and components. It serves as the intermediary between test case software and the hardware. The test rack runs as a **standalone service** that is given a YAML configuration file at startup.
 
 ### Role in Architecture
 
@@ -237,10 +318,15 @@ A **TestRack** is a concrete class representing a physical collection of instrum
 └───────────────────────────────────┬─────────────────────────────────────┘
                                     │
                           Commands / State Changes
+                              (via NATS messaging)
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         TestRack Service                                 │
+│                      TestRack Service (standalone)                       │
+│                                                                         │
+│  Startup: load YAML → dynamic-import drivers → verify identities        │
+│  Runtime: all telemetry and commands flow via NATS messaging             │
+│                                                                         │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
 │  │    PSU      │  │    DMM      │  │   Scope     │  │   Sensor    │    │
 │  │  (BK Prec)  │  │  (Keysight) │  │  (Rigol)    │  │  (Custom)   │    │
@@ -256,9 +342,27 @@ A **TestRack** is a concrete class representing a physical collection of instrum
 A test rack is defined via a YAML configuration file that specifies:
 
 - Rack identification
-- List of instruments with their configuration
-- Connection parameters for each instrument
+- List of instruments with their **driver module paths** for dynamic loading
+- Expected identity (manufacturer, model) for verification
+- Driver-specific keyword arguments (connection parameters, sample rates, etc.)
 - Channel-specific settings
+
+#### Dynamic Instrument Loading
+
+Each instrument entry specifies a `driver` field containing a Python module path and factory function name in `module.path:function_name` format. The rack uses `importlib` to load the module from the current virtual environment's namespace and calls the factory function with the kwargs from the YAML.
+
+```python
+# Pseudocode for rack instrument loading
+module_path, func_name = driver_spec.rsplit(":", 1)
+module = importlib.import_module(module_path)
+factory = getattr(module, func_name)
+instrument = factory(**kwargs)
+```
+
+This approach means:
+- Any instrument driver installed in the virtual environment can be loaded
+- No hard-coded instrument registry — new drivers are discovered automatically
+- The factory function signature defines what kwargs are required
 
 #### Example Configuration
 
@@ -270,64 +374,102 @@ rack:
 
 instruments:
   - id: "psu01"
-    type: "bk_precision_9140"
-    connection:
-      interface: "usb"
-      port: "/dev/ttyUSB0"
-      baudrate: 57600
+    driver: "hwtest_bkprecision.psu:create_instrument"
+    identity:
+      manufacturer: "B&K Precision"
+      model: "9115"
+    kwargs:
+      visa_address: "TCPIP::192.168.1.100::5025::SOCKET"
     channels:
       - id: 0
-        name: "DUT_3V3"
+        alias: "dut_3v3"
         voltage_limit: 3.6
         current_limit: 2.0
       - id: 1
-        name: "DUT_5V"
+        alias: "dut_5v"
         voltage_limit: 5.5
         current_limit: 3.0
       - id: 2
-        name: "DUT_12V"
+        alias: "dut_12v"
         voltage_limit: 13.0
         current_limit: 5.0
 
   - id: "dmm01"
-    type: "keysight_34461a"
-    connection:
-      interface: "ethernet"
-      address: "192.168.1.100"
+    driver: "hwtest_keysight.dmm:create_instrument"
+    identity:
+      manufacturer: "Keysight Technologies"
+      model: "34465A"
+    kwargs:
+      visa_address: "TCPIP::192.168.1.101::INSTR"
+      sample_period: 0.1
     channels:
       - id: 0
-        name: "DUT_VOLTAGE"
+        alias: "dut_voltage_monitor"
         mode: "dc_voltage"
         range: "10V"
 
   - id: "temp01"
-    type: "thermocouple_reader"
-    connection:
-      interface: "serial"
-      port: "/dev/ttyUSB1"
+    driver: "hwtest_mcc.mcc118:create_instrument"
+    identity:
+      manufacturer: "Measurement Computing"
+      model: "MCC 118"
+    kwargs:
+      hat_address: 0
+      sample_rate: 1000.0
     channels:
       - id: 0
-        name: "CHAMBER_TEMP"
+        alias: "chamber_temp"
       - id: 1
-        name: "DUT_TEMP"
+        alias: "dut_temp"
 ```
 
 ### TestRack Lifecycle
 
 1. **Load Configuration**: Parse YAML file, validate structure
-2. **Initialize Instruments**: Create instrument instances with configuration
-3. **Connect**: Establish connections to all instruments
-4. **Start Telemetry**: Begin publishing from all channels
-5. **Run**: Process commands, publish telemetry (runs as service)
-6. **Shutdown**: Stop telemetry, disconnect instruments, cleanup
+2. **Dynamic Import**: For each instrument, import the driver module and resolve the factory function
+3. **Instantiate**: Call each factory function with the kwargs from YAML to create instrument instances
+4. **Verify Identity**: Call `instrument.get_identity()` on each instrument and compare against the expected `identity.manufacturer` and `identity.model` from YAML. If the identity does not match, flag an error and halt initialization. Serial number and firmware version are logged but not validated (they vary per physical unit).
+5. **Start Telemetry**: Begin publishing from all channels via NATS messaging
+6. **Run**: Process commands, publish telemetry (runs as long-lived service)
+7. **Shutdown**: Stop telemetry, call `instrument.close()` on each instrument, cleanup
+
+#### Identity Verification
+
+The rack validates each instrument's identity at startup:
+
+```python
+identity = instrument.get_identity()
+
+if identity.manufacturer != expected_manufacturer:
+    raise InstrumentMismatchError(
+        f"Instrument {instrument_id}: expected manufacturer "
+        f"'{expected_manufacturer}', got '{identity.manufacturer}'"
+    )
+if identity.model != expected_model:
+    raise InstrumentMismatchError(
+        f"Instrument {instrument_id}: expected model "
+        f"'{expected_model}', got '{identity.model}'"
+    )
+
+# Log serial and firmware for traceability
+log.info(
+    "Instrument %s verified: %s %s (SN: %s, FW: %s)",
+    instrument_id, identity.manufacturer, identity.model,
+    identity.serial, identity.firmware,
+)
+```
+
+This catches wiring errors (wrong instrument on a port), misconfigured VISA addresses, and rack hardware changes that were not reflected in the YAML.
 
 ### TestRack as a Service
 
-The TestRack runs as an independent service process:
+The TestRack runs as an independent, long-lived service process:
 
 - **Single process per rack**: One service manages all instruments in a rack
-- **Telemetry aggregation**: All instrument channels publish to NATS
-- **Command routing**: Incoming commands routed to appropriate instrument/channel
+- **Started with YAML**: The service is launched with a path to the rack configuration file
+- **Telemetry via messaging**: All instrument channels publish to NATS, ensuring loggers capture all operational data for post-test fault analysis
+- **Command routing via messaging**: Incoming commands routed to appropriate instrument/channel through NATS, also captured by loggers
+- **Identity verification at startup**: Confirms all instruments match expectations before entering the run state
 - **Health monitoring**: Track instrument connectivity and errors
 - **Graceful shutdown**: Clean disconnect on service termination
 
@@ -387,10 +529,12 @@ rack:
 
 instruments:
   - id: "psu01"
-    type: "bk_precision_9140"
-    connection:
-      interface: "usb"
-      port: "/dev/ttyUSB0"
+    driver: "hwtest_bkprecision.psu:create_instrument"
+    identity:
+      manufacturer: "B&K Precision"
+      model: "9115"
+    kwargs:
+      visa_address: "TCPIP::192.168.1.100::5025::SOCKET"
     channels:
       - id: 0
         alias: "dut_3v3"           # Logical name
@@ -403,10 +547,13 @@ instruments:
         voltage_limit: 13.0
 
   - id: "dmm01"
-    type: "keysight_34461a"
-    connection:
-      interface: "ethernet"
-      address: "192.168.1.100"
+    driver: "hwtest_keysight.dmm:create_instrument"
+    identity:
+      manufacturer: "Keysight Technologies"
+      model: "34465A"
+    kwargs:
+      visa_address: "TCPIP::192.168.1.101::INSTR"
+      sample_period: 0.1
     channels:
       - id: 0
         alias: "dut_voltage_monitor"  # Logical name

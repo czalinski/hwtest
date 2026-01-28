@@ -17,6 +17,7 @@ from hwtest_core.types.bounds import (
 from hwtest_core.types.common import (
     ChannelId,
     DataType,
+    InstrumentIdentity,
     MonitorId,
     SourceId,
     StateId,
@@ -52,6 +53,7 @@ __all__ = [
     # Common types
     "ChannelId",
     "DataType",
+    "InstrumentIdentity",
     "MonitorId",
     "SourceId",
     "StateId",
