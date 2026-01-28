@@ -618,3 +618,79 @@ class TestOverrunHandling:
 
         assert "hardware buffer overrun" in caplog.text
         assert "software buffer overrun" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+
+
+class TestMcc118Identity:
+    async def test_get_identity(self) -> None:
+        config = Mcc118Config(
+            address=0,
+            sample_rate=1000.0,
+            channels=(Mcc118Channel(0, "ch0"),),
+            source_id="daq01",
+        )
+        mock_module, mock_hat = _make_mock_daqhats()
+        mock_hat.serial.return_value = "SN12345"
+        mock_hat.a_in_scan_read.return_value = _make_scan_result([], running=False)
+
+        publisher = MagicMock()
+        publisher.publish = AsyncMock()
+        instrument = Mcc118Instrument(config, publisher)
+
+        with patch.dict(sys.modules, {"daqhats": mock_module}):
+            await instrument.start()
+            identity = instrument.get_identity()
+            await asyncio.sleep(0.1)
+            await instrument.stop()
+
+        assert identity.manufacturer == "Measurement Computing"
+        assert identity.model == "MCC 118"
+        assert identity.serial == "SN12345"
+        assert identity.firmware == ""
+
+    def test_get_identity_before_start(self) -> None:
+        config = Mcc118Config(
+            address=0,
+            sample_rate=1000.0,
+            channels=(Mcc118Channel(0, "ch0"),),
+            source_id="daq01",
+        )
+        instrument = Mcc118Instrument(config, MagicMock())
+
+        with pytest.raises(HwtestError, match="HAT not opened"):
+            instrument.get_identity()
+
+
+# ---------------------------------------------------------------------------
+# Factory function
+# ---------------------------------------------------------------------------
+
+
+class TestCreateInstrument:
+    def test_create_instrument(self) -> None:
+        from hwtest_mcc.mcc118 import create_instrument
+
+        publisher = MagicMock()
+        instrument = create_instrument(
+            address=1,
+            sample_rate=500.0,
+            channels=[
+                {"id": 0, "name": "voltage_a"},
+                {"id": 2, "name": "voltage_b"},
+            ],
+            source_id="test_daq",
+            publisher=publisher,
+        )
+
+        assert instrument._config.address == 1
+        assert instrument._config.sample_rate == 500.0
+        assert len(instrument._config.channels) == 2
+        assert instrument._config.channels[0].id == 0
+        assert instrument._config.channels[0].name == "voltage_a"
+        assert instrument._config.channels[1].id == 2
+        assert instrument._config.channels[1].name == "voltage_b"
+        assert instrument._config.source_id == "test_daq"

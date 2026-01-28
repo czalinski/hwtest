@@ -1,0 +1,84 @@
+# Orange Pi 5 Integration Test Rack Configuration
+#
+# MCC DAQ HAT Stack:
+#   Address 0 (binary 000): MCC 152 - DIO and analog output
+#   Address 1 (binary 001): MCC 118 - Voltage DAQ
+#   Address 4 (binary 100): MCC 134 - Thermocouple DAQ
+
+rack:
+  id: "orange-pi-5-integration"
+  description: "Orange Pi 5 integration test rack with MCC DAQ HATs"
+
+instruments:
+  dio_controller:
+    driver: "hwtest_mcc.mcc152:create_instrument"
+    identity:
+      manufacturer: "Measurement Computing"
+      model: "MCC 152"
+    kwargs:
+      address: 0
+      source_id: "dio_controller"
+      dio_channels:
+        - id: 0
+          name: "relay_dut_power"
+          direction: "OUTPUT"
+          initial_value: false
+        - id: 1
+          name: "relay_load"
+          direction: "OUTPUT"
+          initial_value: false
+        - id: 2
+          name: "sensor_door"
+          direction: "INPUT"
+        - id: 3
+          name: "sensor_estop"
+          direction: "INPUT"
+      analog_channels:
+        - id: 0
+          name: "control_voltage"
+          initial_voltage: 0.0
+        - id: 1
+          name: "reference_voltage"
+          initial_voltage: 2.5
+
+  voltage_daq:
+    driver: "hwtest_mcc.mcc118:create_instrument"
+    identity:
+      manufacturer: "Measurement Computing"
+      model: "MCC 118"
+    kwargs:
+      address: 1
+      sample_rate: 1000.0
+      source_id: "voltage_daq"
+      channels:
+        - id: 0
+          name: "dut_voltage"
+        - id: 1
+          name: "dut_current_sense"
+        - id: 2
+          name: "supply_voltage"
+        - id: 3
+          name: "reference_voltage"
+
+  thermocouple_daq:
+    driver: "hwtest_mcc.mcc134:create_instrument"
+    identity:
+      manufacturer: "Measurement Computing"
+      model: "MCC 134"
+    kwargs:
+      address: 4
+      source_id: "thermocouple_daq"
+      update_interval: 1.0
+      channels:
+        - id: 0
+          name: "chamber_temp"
+          tc_type: "TYPE_K"
+        - id: 1
+          name: "dut_temp"
+          tc_type: "TYPE_K"
+        - id: 2
+          name: "ambient_temp"
+          tc_type: "TYPE_T"
+        - id: 3
+          name: "heatsink_temp"
+          tc_type: "TYPE_K"

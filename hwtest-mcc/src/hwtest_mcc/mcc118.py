@@ -12,7 +12,7 @@ from typing import Any
 
 from hwtest_core.errors import HwtestError
 from hwtest_core.interfaces.streaming import StreamPublisher
-from hwtest_core.types.common import DataType, SourceId
+from hwtest_core.types.common import DataType, InstrumentIdentity, SourceId
 from hwtest_core.types.streaming import StreamData, StreamField, StreamSchema
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,29 @@ class Mcc118Instrument:
     def is_running(self) -> bool:
         """Return True if the instrument is actively scanning."""
         return self._running
+
+    def get_identity(self) -> InstrumentIdentity:
+        """Return the instrument identity.
+
+        For MCC DAQ HATs, identity information is obtained from the daqhats
+        library rather than an ``*IDN?`` query. The HAT must be opened first
+        (via :meth:`start`) before calling this method.
+
+        Returns:
+            Instrument identity with manufacturer, model, serial, and firmware.
+
+        Raises:
+            HwtestError: If the HAT has not been opened yet.
+        """
+        if self._hat is None:
+            raise HwtestError("HAT not opened; call start() first")
+        serial: str = self._hat.serial()
+        return InstrumentIdentity(
+            manufacturer="Measurement Computing",
+            model="MCC 118",
+            serial=serial,
+            firmware="",
+        )
 
     def _channel_mask(self) -> int:
         """Compute the channel bitmask for a_in_scan_start."""
@@ -250,3 +273,34 @@ class Mcc118Instrument:
             if not result.running:
                 logger.warning("MCC 118 scan stopped unexpectedly")
                 break
+
+
+def create_instrument(
+    address: int,
+    sample_rate: float,
+    channels: list[dict[str, Any]],
+    source_id: str,
+    publisher: StreamPublisher,
+) -> Mcc118Instrument:
+    """Create an MCC 118 instrument from configuration parameters.
+
+    Standard factory entry point for the test rack and programmatic use.
+
+    Args:
+        address: HAT address on the stack (0-7).
+        sample_rate: Requested sample rate per channel in Hz.
+        channels: List of channel definitions, each with ``id`` and ``name``.
+        source_id: Stream source identifier.
+        publisher: Stream publisher for sending data batches.
+
+    Returns:
+        Configured instrument instance (call ``start()`` to begin scanning).
+    """
+    channel_objs = tuple(Mcc118Channel(ch["id"], ch["name"]) for ch in channels)
+    config = Mcc118Config(
+        address=address,
+        sample_rate=sample_rate,
+        channels=channel_objs,
+        source_id=source_id,
+    )
+    return Mcc118Instrument(config, publisher)
