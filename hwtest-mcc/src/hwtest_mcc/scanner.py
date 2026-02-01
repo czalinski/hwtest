@@ -152,6 +152,17 @@ def _try_open_and_verify_hat(
     except Exception:  # pylint: disable=broad-exception-caught
         return None
 
+    # Check serial first - "00000000" means EEPROM wasn't read (likely no HAT)
+    try:
+        serial: str = hat.serial()
+    except Exception:  # pylint: disable=broad-exception-caught
+        serial = ""
+
+    if serial == "00000000" or serial == "":
+        if verbose:
+            print(" (no valid EEPROM)", end="", file=sys.stderr)
+        return None
+
     # Verify with hardware communication
     verify_func = _VERIFY_FUNCTIONS.get(hat_class_name)
     if verify_func is None:
@@ -162,12 +173,7 @@ def _try_open_and_verify_hat(
             print(" (opened but verification failed)", end="", file=sys.stderr)
         return None
 
-    try:
-        serial: str = hat.serial()
-        return serial
-    except Exception:  # pylint: disable=broad-exception-caught
-        # HAT verified but couldn't get serial - still report it
-        return "unknown"
+    return serial
 
 
 def scan_hats(

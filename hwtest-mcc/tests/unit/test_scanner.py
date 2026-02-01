@@ -170,6 +170,21 @@ class TestScanHats:
         assert found[0].model == "MCC 134"
         assert found[0].serial == "OPEN_TC"
 
+    def test_rejects_default_serial(self) -> None:
+        """HATs with serial '00000000' are rejected as likely false positives."""
+        # HAT with default serial should be rejected even if verification passes
+        mock_hat = _create_mock_mcc118(serial="00000000", voltage=1.5)
+
+        mock_daqhats = MagicMock()
+        mock_daqhats.mcc118.return_value = mock_hat
+        mock_daqhats.mcc134.return_value = _create_mock_mcc134(serial="00000000", temp=25.0)
+        mock_daqhats.mcc152.return_value = _create_mock_mcc152(serial="00000000", dio_value=128)
+
+        with patch.dict("sys.modules", {"daqhats": mock_daqhats}):
+            found = scan_hats(addresses=[0])
+
+        assert found == []
+
 
 class TestMain:
     """Tests for the main CLI entry point."""
