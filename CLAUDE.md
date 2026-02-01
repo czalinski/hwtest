@@ -14,13 +14,14 @@ Each package has its own directory. Use a shared venv or per-package venvs. Exam
 # Setup (shared venv)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-rack[dev]"
+pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]"
 
 # Testing (run from each package directory)
 cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-scpi && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-bkprecision && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-mcc && python3 -m pytest tests/unit/ -v && cd ..
+cd hwtest-waveshare && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-rack && python3 -m pytest tests/unit/ -v && cd ..
 
 # Single file / single test
@@ -49,6 +50,7 @@ hwtest-core  (stdlib-only, no external deps)
   ├── hwtest-scpi  (depends on hwtest-core; optional pyvisa)
   │     └── hwtest-bkprecision  (depends on hwtest-scpi)
   ├── hwtest-mcc  (depends on hwtest-core; optional daqhats)
+  ├── hwtest-waveshare  (depends on hwtest-core; optional spidev, lgpio)
   └── hwtest-rack  (depends on hwtest-core; fastapi, uvicorn, pyyaml)
 ```
 
@@ -100,6 +102,46 @@ Drivers for Measurement Computing DAQ HAT boards (Raspberry Pi / Orange Pi compa
   - `create_instrument()`: Factory entry point
 
 All MCC drivers implement `get_identity()` returning `InstrumentIdentity` with manufacturer="Measurement Computing".
+
+### Waveshare HAT Drivers (hwtest-waveshare)
+
+Drivers for Waveshare HAT boards (Raspberry Pi 5 compatible via lgpio):
+
+- **High-Precision AD/DA Board** (`high_precision_ad_da.py`): Combined ADC/DAC instrument
+  - `HighPrecisionAdDaInstrument`: Unified driver for ADC reads and DAC writes
+  - `AdcChannel`, `DacChannel`: Channel mapping with aliases
+  - `HighPrecisionAdDaConfig`: Full board configuration
+  - `create_instrument()`: Factory entry point
+
+- **ADS1256** (`ads1256.py`): 8-channel 24-bit ADC (30 kSPS max)
+  - `Ads1256`: Low-level SPI driver
+  - `Ads1256Gain` enum: GAIN_1, GAIN_2, GAIN_4, GAIN_8, GAIN_16, GAIN_32, GAIN_64
+  - `Ads1256DataRate` enum: SPS_2_5 to SPS_30000
+  - Single-ended and differential measurements
+  - `read_voltage()`, `read_differential()`, `read_all_channels()`
+
+- **DAC8532** (`dac8532.py`): 2-channel 16-bit DAC (0-5V output)
+  - `Dac8532`: Low-level SPI driver
+  - `write_voltage()`, `write_raw()`, `write_both()`
+  - Software readback of last written values
+
+- **GPIO Abstraction** (`gpio.py`): Pi 5 compatible GPIO layer
+  - Uses `lgpio` library for RP1 chip compatibility
+  - `Gpio`: Pin management with setup/input/output/close
+
+All Waveshare drivers implement `get_identity()` returning `InstrumentIdentity` with manufacturer="Waveshare".
+
+**Raspberry Pi 5 Setup**: The Waveshare HATs require device tree overlays in `/boot/firmware/config.txt`:
+```
+# High-Precision AD/DA uses SPI0 (no overlay needed, just dtparam=spi=on)
+dtparam=spi=on
+
+# 2-CH CAN FD HAT (if using)
+dtoverlay=waveshare-can-fd-hat-mode-a
+
+# 2-CH RS-232 HAT (if using)
+dtoverlay=sc16is752-spi1,int_pin=24
+```
 
 ### Test Rack Service (hwtest-rack)
 
