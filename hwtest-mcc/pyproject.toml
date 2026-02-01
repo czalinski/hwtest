@@ -32,6 +32,9 @@ dev = [
     "pylint>=3.0",
 ]
 
+[project.scripts]
+mcc-scan = "hwtest_mcc.scanner:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

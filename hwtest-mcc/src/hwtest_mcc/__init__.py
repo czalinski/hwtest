@@ -21,6 +21,7 @@ from hwtest_mcc.mcc152 import (
     Mcc152Instrument,
     create_instrument as create_mcc152,
 )
+from hwtest_mcc.scanner import HatInfo, scan_hats
 
 __all__ = [
     # MCC 118
@@ -41,4 +42,7 @@ __all__ = [
     "Mcc152DioChannel",
     "Mcc152Instrument",
     "create_mcc152",
+    # Scanner
+    "HatInfo",
+    "scan_hats",
 ]
