@@ -16,13 +16,10 @@ from hwtest_waveshare.ads1256 import (
 
 
 def _create_mock_gpio() -> MagicMock:
-    """Create a mock GPIO interface."""
+    """Create a mock GPIO interface (matching Gpio class)."""
     mock = MagicMock()
-    mock.BCM = 11
-    mock.IN = 1
-    mock.OUT = 0
-    mock.HIGH = 1
-    mock.LOW = 0
+    # Mock the input method to return LOW (0) for DRDY ready
+    mock.input.return_value = 0
     return mock
 
 
@@ -114,13 +111,14 @@ class TestAds1256:
         adc.open()
 
         assert adc.is_open
-        mock_gpio.setmode.assert_called_once_with(mock_gpio.BCM)
-        mock_gpio.setup.assert_any_call(22, mock_gpio.OUT, initial=mock_gpio.HIGH)
-        mock_gpio.setup.assert_any_call(17, mock_gpio.IN)
+        # New GPIO interface uses setup(pin, direction, initial)
+        # Direction: OUTPUT=1, INPUT=0; Value: HIGH=1, LOW=0
+        mock_gpio.setup.assert_any_call(22, 1, initial=1)  # CS pin as output, high
+        mock_gpio.setup.assert_any_call(17, 0)  # DRDY pin as input
 
         adc.close()
         assert not adc.is_open
-        mock_gpio.cleanup.assert_called()
+        mock_gpio.close.assert_called()
 
     def test_double_open_raises(self) -> None:
         """Opening an already open device raises RuntimeError."""

@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
+from hwtest_waveshare.gpio import Gpio, INPUT, OUTPUT, HIGH, LOW
+
 if TYPE_CHECKING:
     from typing import Protocol
 
@@ -43,25 +45,6 @@ if TYPE_CHECKING:
         def close(self) -> None:
             """Close the SPI device."""
             ...
-
-    class GpioInterface(Protocol):
-        """Protocol for GPIO interface (RPi.GPIO compatible)."""
-
-        BCM: int
-        IN: int
-        OUT: int
-        HIGH: int
-        LOW: int
-
-        def setmode(self, mode: int) -> None: ...
-
-        def setup(self, pin: int, direction: int, initial: int = ...) -> None: ...
-
-        def input(self, pin: int) -> int: ...
-
-        def output(self, pin: int, value: int) -> None: ...
-
-        def cleanup(self, pin: int | list[int] | None = None) -> None: ...
 
 
 class Ads1256Gain(IntEnum):
@@ -228,27 +211,20 @@ class Ads1256:
 
         Raises:
             RuntimeError: If the device is already open.
-            ImportError: If spidev or RPi.GPIO is not available.
+            ImportError: If spidev or lgpio is not available.
         """
         if self._opened:
             raise RuntimeError("Device already open")
 
-        # Initialize GPIO
+        # Initialize GPIO using lgpio (Pi 5 compatible)
         if self._gpio is None:
-            try:
-                import RPi.GPIO as GPIO  # type: ignore[import-untyped]
+            self._gpio = Gpio()
+            self._gpio.open()
 
-                self._gpio = GPIO
-            except ImportError as exc:
-                raise ImportError(
-                    "RPi.GPIO library is not installed. Install with: pip install RPi.GPIO"
-                ) from exc
-
-        self._gpio.setmode(self._gpio.BCM)
-        self._gpio.setup(self._config.cs_pin, self._gpio.OUT, initial=self._gpio.HIGH)
-        self._gpio.setup(self._config.drdy_pin, self._gpio.IN)
+        self._gpio.setup(self._config.cs_pin, OUTPUT, initial=HIGH)
+        self._gpio.setup(self._config.drdy_pin, INPUT)
         if self._config.reset_pin is not None:
-            self._gpio.setup(self._config.reset_pin, self._gpio.OUT, initial=self._gpio.HIGH)
+            self._gpio.setup(self._config.reset_pin, OUTPUT, initial=HIGH)
 
         # Initialize SPI
         if self._spi is None:
@@ -287,11 +263,8 @@ class Ads1256:
                 pass
 
         if self._gpio is not None:
-            pins = [self._config.cs_pin, self._config.drdy_pin]
-            if self._config.reset_pin is not None:
-                pins.append(self._config.reset_pin)
             try:
-                self._gpio.cleanup(pins)
+                self._gpio.close()
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
@@ -300,12 +273,12 @@ class Ads1256:
     def _cs_low(self) -> None:
         """Assert chip select (active low)."""
         assert self._gpio is not None
-        self._gpio.output(self._config.cs_pin, self._gpio.LOW)
+        self._gpio.output(self._config.cs_pin, LOW)
 
     def _cs_high(self) -> None:
         """Deassert chip select."""
         assert self._gpio is not None
-        self._gpio.output(self._config.cs_pin, self._gpio.HIGH)
+        self._gpio.output(self._config.cs_pin, HIGH)
 
     def _wait_drdy(self, timeout_s: float = 1.0) -> bool:
         """Wait for DRDY to go low (data ready).
@@ -319,7 +292,7 @@ class Ads1256:
         assert self._gpio is not None
         start = time.monotonic()
         while time.monotonic() - start < timeout_s:
-            if self._gpio.input(self._config.drdy_pin) == self._gpio.LOW:
+            if self._gpio.input(self._config.drdy_pin) == LOW:
                 return True
             time.sleep(0.0001)  # 100us
         return False
@@ -365,9 +338,9 @@ class Ads1256:
         assert self._gpio is not None
         if self._config.reset_pin is not None:
             # Hardware reset
-            self._gpio.output(self._config.reset_pin, self._gpio.LOW)
+            self._gpio.output(self._config.reset_pin, LOW)
             time.sleep(0.001)  # 1ms
-            self._gpio.output(self._config.reset_pin, self._gpio.HIGH)
+            self._gpio.output(self._config.reset_pin, HIGH)
             time.sleep(0.001)  # Wait for reset to complete
         else:
             # Software reset

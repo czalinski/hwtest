@@ -19,6 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from hwtest_waveshare.gpio import Gpio, OUTPUT, HIGH, LOW
+
 if TYPE_CHECKING:
     from typing import Protocol
 
@@ -36,23 +38,6 @@ if TYPE_CHECKING:
         def close(self) -> None:
             """Close the SPI device."""
             ...
-
-    class GpioInterface(Protocol):
-        """Protocol for GPIO interface (RPi.GPIO compatible)."""
-
-        BCM: int
-        IN: int
-        OUT: int
-        HIGH: int
-        LOW: int
-
-        def setmode(self, mode: int) -> None: ...
-
-        def setup(self, pin: int, direction: int, initial: int = ...) -> None: ...
-
-        def output(self, pin: int, value: int) -> None: ...
-
-        def cleanup(self, pin: int | list[int] | None = None) -> None: ...
 
 
 class Dac8532Channel:
@@ -133,24 +118,17 @@ class Dac8532:
 
         Raises:
             RuntimeError: If the device is already open.
-            ImportError: If spidev or RPi.GPIO is not available.
+            ImportError: If spidev or lgpio is not available.
         """
         if self._opened:
             raise RuntimeError("Device already open")
 
-        # Initialize GPIO
+        # Initialize GPIO using lgpio (Pi 5 compatible)
         if self._gpio is None:
-            try:
-                import RPi.GPIO as GPIO  # type: ignore[import-untyped]
+            self._gpio = Gpio()
+            self._gpio.open()
 
-                self._gpio = GPIO
-            except ImportError as exc:
-                raise ImportError(
-                    "RPi.GPIO library is not installed. Install with: pip install RPi.GPIO"
-                ) from exc
-
-        self._gpio.setmode(self._gpio.BCM)
-        self._gpio.setup(self._config.cs_pin, self._gpio.OUT, initial=self._gpio.HIGH)
+        self._gpio.setup(self._config.cs_pin, OUTPUT, initial=HIGH)
 
         # Initialize SPI
         if self._spi is None:
@@ -195,7 +173,7 @@ class Dac8532:
 
         if self._gpio is not None:
             try:
-                self._gpio.cleanup([self._config.cs_pin])
+                self._gpio.close()
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
@@ -204,12 +182,12 @@ class Dac8532:
     def _cs_low(self) -> None:
         """Assert chip select (active low)."""
         assert self._gpio is not None
-        self._gpio.output(self._config.cs_pin, self._gpio.LOW)
+        self._gpio.output(self._config.cs_pin, LOW)
 
     def _cs_high(self) -> None:
         """Deassert chip select."""
         assert self._gpio is not None
-        self._gpio.output(self._config.cs_pin, self._gpio.HIGH)
+        self._gpio.output(self._config.cs_pin, HIGH)
 
     def write_raw(self, channel: int, value: int) -> None:
         """Write a raw 16-bit value to a DAC channel.

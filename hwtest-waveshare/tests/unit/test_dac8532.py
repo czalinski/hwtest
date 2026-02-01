@@ -10,13 +10,8 @@ from hwtest_waveshare.dac8532 import Dac8532, Dac8532Channel, Dac8532Config
 
 
 def _create_mock_gpio() -> MagicMock:
-    """Create a mock GPIO interface."""
+    """Create a mock GPIO interface (matching Gpio class)."""
     mock = MagicMock()
-    mock.BCM = 11
-    mock.IN = 1
-    mock.OUT = 0
-    mock.HIGH = 1
-    mock.LOW = 0
     return mock
 
 
@@ -77,12 +72,13 @@ class TestDac8532:
         dac.open()
 
         assert dac.is_open
-        mock_gpio.setmode.assert_called_once_with(mock_gpio.BCM)
-        mock_gpio.setup.assert_called_with(23, mock_gpio.OUT, initial=mock_gpio.HIGH)
+        # New GPIO interface uses setup(pin, direction, initial)
+        # Direction: OUTPUT=1; Value: HIGH=1
+        mock_gpio.setup.assert_called_with(23, 1, initial=1)
 
         dac.close()
         assert not dac.is_open
-        mock_gpio.cleanup.assert_called()
+        mock_gpio.close.assert_called()
 
     def test_double_open_raises(self) -> None:
         """Opening an already open device raises RuntimeError."""
