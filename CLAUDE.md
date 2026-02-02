@@ -251,7 +251,14 @@ Bring up CAN interface:
 sudo ip link set can0 up type can bitrate 500000
 ```
 
-**MCC DAQ HATs + Waveshare CAN HAT Coexistence**: MCC HATs and Waveshare CAN HATs both use SPI0, but can coexist with hardware modification.
+**MCC DAQ HATs + Waveshare CAN HAT Coexistence (Raspberry Pi 5)**: MCC HATs and Waveshare CAN HATs both use SPI0, but can coexist with hardware modification. This configuration has been tested and verified on Raspberry Pi 5.
+
+**Verified hardware stack:**
+- Raspberry Pi 5
+- MCC 152 (address 0) - Digital I/O + Analog Out
+- MCC 134 (address 1) - Thermocouple DAQ
+- MCC 118 (address 4) - Voltage DAQ
+- Waveshare RS485 CAN HAT (B) - modified for CE1
 
 MCC HAT GPIO usage:
 | Function | GPIO Pin |
@@ -264,17 +271,17 @@ MCC HAT GPIO usage:
 
 The MCC library uses GPIO12/13/26 to select which board (address 0-7) responds, then communicates via SPI0 CE0. All MCC HATs share CE0, leaving CE1 available.
 
-**Waveshare RS485 CAN HAT (B)** can be modified to use CE1 instead of CE0:
+**Waveshare RS485 CAN HAT (B) hardware modification**:
 1. Move the 0Ω resistor on the back from CE0 (GPIO8) position to CE1 (GPIO7) position
 2. Keep interrupt on GPIO25 (do NOT use GPIO13, which conflicts with MCC A1)
 
-Configuration in `/boot/config.txt`:
+Configuration in `/boot/firmware/config.txt` (Pi 5):
 ```
 # Enable SPI
 dtparam=spi=on
 
 # MCP2515 CAN on spi0.1 (CE1/GPIO7) - modified CAN HAT
-dtoverlay=mcp2515-can1,oscillator=8000000,interrupt=25
+dtoverlay=mcp2515-can1,oscillator=12000000,interrupt=25
 ```
 
 Resulting pin allocation:
@@ -284,13 +291,18 @@ Resulting pin allocation:
 | CAN HAT (modified) | spi0.1 | CE1 (GPIO7) | GPIO25 (interrupt) |
 
 The `mcp2515-can1` overlay parameters:
-- `oscillator`: Crystal frequency in Hz (check your HAT, typically 8000000 or 16000000)
+- `oscillator`: Crystal frequency in Hz (12000000 for Waveshare RS485 CAN HAT B)
 - `spimaxfrequency`: SPI clock rate (default 10000000)
 - `interrupt`: GPIO pin for INT (default 25)
 
 Bring up CAN interface:
 ```bash
 sudo ip link set can0 up type can bitrate 500000
+```
+
+Verify MCC HAT detection:
+```bash
+python3 -c "from daqhats import hat_list, HatIDs; [print(f'Address {h.address}: {HatIDs(h.id).name}') for h in hat_list()]"
 ```
 
 ### Test Rack Service (hwtest-rack)
