@@ -144,6 +144,15 @@ Simulated Unit Under Test for integration testing, designed for Raspberry Pi Zer
   - Echo mode with configurable ID offset and message filtering
   - Async receive loop with callbacks
 
+- **ADS1263 ADC** (`ads1263.py`): 32-bit high-precision ADC driver
+  - `Ads1263`: SPI driver with software-controlled chip select for SPI bus sharing
+  - `Ads1263Config`: Pin mapping, reference voltage, gain, and data rate
+  - `Ads1263Gain` enum: GAIN_1, GAIN_2, GAIN_4, GAIN_8, GAIN_16, GAIN_32
+  - `Ads1263DataRate` enum: SPS_2_5 to SPS_38400
+  - 10 single-ended channels (AIN0-AIN9) plus internal references
+  - `read_voltage()`, `read_differential()`, `read_all_channels()`, `read_raw()`
+  - Uses spidev0.1 with GPIO22 for software CS to coexist with CAN HAT on spidev0.0
+
 - **MCP23017 GPIO Expander** (`mcp23017.py`): 16-bit I2C GPIO driver
   - `Mcp23017`: I2C driver via smbus2
   - `Mcp23017Config`: I2C bus and address configuration (0x20-0x27)
@@ -158,7 +167,7 @@ Simulated Unit Under Test for integration testing, designed for Raspberry Pi Zer
   - `SimulatorConfig`: Enable/disable individual interfaces
   - CAN echo mode for loopback testing
   - DAC voltage output (via hwtest-waveshare)
-  - ADC voltage reading (via hwtest-waveshare)
+  - ADC voltage reading (via hwtest-waveshare or ADS1263)
   - GPIO digital I/O (via MCP23017)
 
 - **REST API Server** (`server.py`): FastAPI-based remote control
@@ -192,6 +201,54 @@ dtoverlay=waveshare-can-fd-hat-mode-a
 
 # 2-CH RS-232 HAT (if using)
 dtoverlay=sc16is752-spi1,int_pin=24
+```
+
+**Raspberry Pi Zero Dual-HAT Setup (CAN + ADC)**: When using both RS485 CAN HAT and High-Precision AD HAT together:
+
+Hardware stacking order (bottom to top): Pi Zero → RS485 CAN HAT → High-Precision AD HAT
+
+Both HATs share the SPI bus but use different chip selects:
+- **RS485 CAN HAT** (MCP2515): Uses kernel driver on spi0.0 with hardware CE0 (GPIO8)
+- **High-Precision AD HAT** (ADS1263): Uses spidev0.1 with software CS on GPIO22
+
+Configuration in `/boot/config.txt`:
+```
+# Enable SPI
+dtparam=spi=on
+
+# MCP2515 CAN controller (spi0.0, CE0/GPIO8)
+dtoverlay=mcp2515-can0,oscillator=8000000,interrupt=25
+
+# Enable spidev0.1 for ADC (software CS via GPIO22)
+dtoverlay=spi0-1cs
+```
+
+GPIO pin assignments for ADS1263:
+- DRDY: GPIO17 (data ready signal)
+- RESET: GPIO18 (hardware reset)
+- CS: GPIO22 (software-controlled chip select)
+
+Example configuration:
+```python
+from hwtest_uut import Ads1263, Ads1263Config, CanInterface, CanConfig
+
+# ADC with software CS to share SPI bus
+adc_config = Ads1263Config(
+    spi_bus=0,
+    spi_device=1,   # spidev0.1
+    cs_pin=22,      # Software CS
+    drdy_pin=17,
+    reset_pin=18,
+)
+
+# CAN uses kernel driver (bring up interface first)
+# sudo ip link set can0 up type can bitrate 500000
+can_config = CanConfig(interface="can0", bitrate=500000)
+```
+
+Bring up CAN interface:
+```bash
+sudo ip link set can0 up type can bitrate 500000
 ```
 
 ### Test Rack Service (hwtest-rack)
