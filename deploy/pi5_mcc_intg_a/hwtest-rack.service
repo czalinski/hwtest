@@ -1,0 +1,35 @@
+[Unit]
+Description=hwtest Rack Server (pi5-mcc-intg-a)
+Documentation=https://github.com/czalinski/hwtest
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hwtest
+Group=hwtest
+WorkingDirectory=/opt/hwtest
+
+# Environment
+Environment="PATH=/opt/hwtest/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# Command
+ExecStart=/opt/hwtest/venv/bin/hwtest-rack /opt/hwtest/configs/pi5_mcc_intg_a_rack.yaml --host 0.0.0.0 --port 8080
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Security hardening (while allowing hardware access)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hwtest
+PrivateTmp=true
+
+# Hardware access - required for MCC HATs
+SupplementaryGroups=spi gpio i2c
+
+[Install]
+WantedBy=multi-user.target

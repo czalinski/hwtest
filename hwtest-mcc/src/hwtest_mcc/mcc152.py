@@ -181,8 +181,10 @@ class Mcc152Instrument:
         # Configure DIO directions and initial values
         for ch in self._config.dio_channels:
             try:
-                # Set direction for this single bit
-                hat.dio_config_write_bit(ch.id, ch.direction.value)
+                # Set direction for this single bit (0=output, 1=input)
+                hat.dio_config_write_bit(
+                    ch.id, daqhats.DIOConfigItem.DIRECTION, ch.direction.value
+                )
                 if ch.direction == DioDirection.OUTPUT:
                     hat.dio_output_write_bit(ch.id, int(ch.initial_value))
             except Exception as exc:

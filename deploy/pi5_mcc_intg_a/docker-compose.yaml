@@ -1,0 +1,50 @@
+# Docker Compose for hwtest Rack Server (pi5-mcc-intg-a)
+#
+# Build and run:
+#   cd deploy/pi5_mcc_intg_a
+#   docker compose build
+#   docker compose up -d
+#
+# View logs:
+#   docker compose logs -f
+#
+# NOTE: Requires privileged mode for MCC HAT hardware access
+
+services:
+  hwtest-rack:
+    build:
+      context: ../..
+      dockerfile: deploy/pi5_mcc_intg_a/Dockerfile
+    container_name: hwtest-rack-pi5-mcc-intg-a
+    restart: unless-stopped
+
+    # Required for MCC HAT access (SPI, GPIO, I2C)
+    privileged: true
+
+    # Alternative to privileged (more restrictive but may not work for all HATs):
+    # devices:
+    #   - /dev/spidev0.0:/dev/spidev0.0
+    #   - /dev/gpiomem:/dev/gpiomem
+    #   - /dev/i2c-1:/dev/i2c-1
+
+    volumes:
+      # MCC HAT configuration (read-only)
+      - /etc/mcc:/etc/mcc:ro
+      # Persist logs (optional)
+      - hwtest-logs:/opt/hwtest/logs
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      - TZ=America/Chicago
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  hwtest-logs:

@@ -76,10 +76,13 @@ class Mcc118Instrument:
 
     Args:
         config: Instrument configuration.
-        publisher: Stream publisher for sending data batches.
+        publisher: Stream publisher for sending data batches. Optional if only
+            using the instrument for identity/status checks without streaming.
     """
 
-    def __init__(self, config: Mcc118Config, publisher: StreamPublisher) -> None:
+    def __init__(
+        self, config: Mcc118Config, publisher: StreamPublisher | None = None
+    ) -> None:
         self._config = config
         self._publisher = publisher
         self._schema = StreamSchema(
@@ -111,7 +114,7 @@ class Mcc118Instrument:
 
         For MCC DAQ HATs, identity information is obtained from the daqhats
         library rather than an ``*IDN?`` query. The HAT must be opened first
-        (via :meth:`start`) before calling this method.
+        (via :meth:`open` or :meth:`start`) before calling this method.
 
         Returns:
             Instrument identity with manufacturer, model, serial, and firmware.
@@ -120,7 +123,7 @@ class Mcc118Instrument:
             HwtestError: If the HAT has not been opened yet.
         """
         if self._hat is None:
-            raise HwtestError("HAT not opened; call start() first")
+            raise HwtestError("HAT not opened; call open() or start() first")
         serial: str = self._hat.serial()
         return InstrumentIdentity(
             manufacturer="Measurement Computing",
@@ -128,6 +131,45 @@ class Mcc118Instrument:
             serial=serial,
             firmware="",
         )
+
+    def open(self) -> None:
+        """Open the HAT (synchronous).
+
+        This method opens the HAT for identity queries without starting
+        the continuous scan. Use :meth:`start` to begin scanning.
+
+        Raises:
+            HwtestError: If the daqhats library is not installed or the
+                HAT cannot be opened at the configured address.
+        """
+        if self._hat is not None:
+            return
+
+        try:
+            import daqhats  # type: ignore[import-not-found]  # pylint: disable=import-outside-toplevel
+        except ImportError as exc:
+            raise HwtestError(
+                "daqhats library is not installed. Install with: pip install daqhats"
+            ) from exc
+
+        try:
+            hat = daqhats.mcc118(self._config.address)
+        except Exception as exc:
+            raise HwtestError(
+                f"Failed to open MCC 118 at address {self._config.address}: {exc}"
+            ) from exc
+
+        self._hat = hat
+
+    def close(self) -> None:
+        """Close the HAT connection."""
+        if self._hat is not None:
+            try:
+                self._hat.a_in_scan_stop()
+                self._hat.a_in_scan_cleanup()
+            except Exception:
+                pass  # Ignore cleanup errors
+            self._hat = None
 
     def _channel_mask(self) -> int:
         """Compute the channel bitmask for a_in_scan_start."""
@@ -140,11 +182,18 @@ class Mcc118Instrument:
         """Open the HAT and begin continuous scanning.
 
         Raises:
-            HwtestError: If the daqhats library is not installed or the
-                HAT cannot be opened at the configured address.
+            HwtestError: If the daqhats library is not installed, the
+                HAT cannot be opened, or no publisher was configured.
         """
         if self._running:
             return
+
+        if self._publisher is None:
+            raise HwtestError("Cannot start streaming without a publisher")
+
+        # Open the HAT if not already opened
+        if self._hat is None:
+            self.open()
 
         try:
             import daqhats  # type: ignore[import-not-found]  # pylint: disable=import-outside-toplevel
@@ -155,23 +204,12 @@ class Mcc118Instrument:
 
         loop = asyncio.get_running_loop()
 
-        try:
-            hat = await loop.run_in_executor(None, daqhats.mcc118, self._config.address)
-        except HwtestError:
-            raise
-        except Exception as exc:
-            raise HwtestError(
-                f"Failed to open MCC 118 at address {self._config.address}: {exc}"
-            ) from exc
-
-        self._hat = hat
-
         channel_mask = self._channel_mask()
         options = daqhats.OptionFlags.CONTINUOUS
 
         actual_rate: float = await loop.run_in_executor(
             None,
-            hat.a_in_scan_start,
+            self._hat.a_in_scan_start,
             channel_mask,
             0,
             self._config.sample_rate,
@@ -280,7 +318,7 @@ def create_instrument(
     sample_rate: float,
     channels: list[dict[str, Any]],
     source_id: str,
-    publisher: StreamPublisher,
+    publisher: StreamPublisher | None = None,
 ) -> Mcc118Instrument:
     """Create an MCC 118 instrument from configuration parameters.
 
@@ -291,7 +329,8 @@ def create_instrument(
         sample_rate: Requested sample rate per channel in Hz.
         channels: List of channel definitions, each with ``id`` and ``name``.
         source_id: Stream source identifier.
-        publisher: Stream publisher for sending data batches.
+        publisher: Stream publisher for sending data batches. Optional if only
+            using the instrument for identity/status checks without streaming.
 
     Returns:
         Configured instrument instance (call ``start()`` to begin scanning).

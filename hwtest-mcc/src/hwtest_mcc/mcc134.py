@@ -96,10 +96,13 @@ class Mcc134Instrument:
 
     Args:
         config: Instrument configuration.
-        publisher: Stream publisher for sending data batches.
+        publisher: Stream publisher for sending data batches. Optional if only
+            using the instrument for identity/status checks without streaming.
     """
 
-    def __init__(self, config: Mcc134Config, publisher: StreamPublisher) -> None:
+    def __init__(
+        self, config: Mcc134Config, publisher: StreamPublisher | None = None
+    ) -> None:
         self._config = config
         self._publisher = publisher
         self._schema = StreamSchema(
@@ -127,7 +130,7 @@ class Mcc134Instrument:
 
         For MCC DAQ HATs, identity information is obtained from the daqhats
         library rather than an ``*IDN?`` query. The HAT must be opened first
-        (via :meth:`start`) before calling this method.
+        (via :meth:`open` or :meth:`start`) before calling this method.
 
         Returns:
             Instrument identity with manufacturer, model, serial, and firmware.
@@ -136,7 +139,7 @@ class Mcc134Instrument:
             HwtestError: If the HAT has not been opened yet.
         """
         if self._hat is None:
-            raise HwtestError("HAT not opened; call start() first")
+            raise HwtestError("HAT not opened; call open() or start() first")
         serial: str = self._hat.serial()
         return InstrumentIdentity(
             manufacturer="Measurement Computing",
@@ -145,14 +148,18 @@ class Mcc134Instrument:
             firmware="",
         )
 
-    async def start(self) -> None:
-        """Open the HAT and begin periodic temperature polling.
+    def open(self) -> None:
+        """Open the HAT and configure channels (synchronous).
+
+        This method opens the HAT for identity queries and manual reads
+        without starting the async polling loop. Use :meth:`start` to
+        begin automatic polling.
 
         Raises:
             HwtestError: If the daqhats library is not installed or the
                 HAT cannot be opened at the configured address.
         """
-        if self._running:
+        if self._hat is not None:
             return
 
         try:
@@ -162,12 +169,8 @@ class Mcc134Instrument:
                 "daqhats library is not installed. Install with: pip install daqhats"
             ) from exc
 
-        loop = asyncio.get_running_loop()
-
         try:
-            hat = await loop.run_in_executor(None, daqhats.mcc134, self._config.address)
-        except HwtestError:
-            raise
+            hat = daqhats.mcc134(self._config.address)
         except Exception as exc:
             raise HwtestError(
                 f"Failed to open MCC 134 at address {self._config.address}: {exc}"
@@ -178,14 +181,34 @@ class Mcc134Instrument:
         # Configure thermocouple types for each channel
         for ch in self._config.channels:
             try:
-                await loop.run_in_executor(
-                    None, hat.tc_type_write, ch.id, ch.tc_type.value
-                )
+                hat.tc_type_write(ch.id, ch.tc_type.value)
             except Exception as exc:
                 raise HwtestError(
                     f"Failed to configure thermocouple type for channel {ch.id}: {exc}"
                 ) from exc
 
+    def close(self) -> None:
+        """Close the HAT connection."""
+        self._hat = None
+
+    async def start(self) -> None:
+        """Open the HAT and begin periodic temperature polling.
+
+        Raises:
+            HwtestError: If the daqhats library is not installed, the
+                HAT cannot be opened, or no publisher was configured.
+        """
+        if self._running:
+            return
+
+        if self._publisher is None:
+            raise HwtestError("Cannot start streaming without a publisher")
+
+        # Open the HAT if not already opened
+        if self._hat is None:
+            self.open()
+
+        # Start the polling task
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
 
@@ -256,7 +279,7 @@ def create_instrument(
     address: int,
     channels: list[dict[str, Any]],
     source_id: str,
-    publisher: StreamPublisher,
+    publisher: StreamPublisher | None = None,
     update_interval: float = 1.0,
 ) -> Mcc134Instrument:
     """Create an MCC 134 instrument from configuration parameters.
@@ -268,7 +291,8 @@ def create_instrument(
         channels: List of channel definitions, each with ``id``, ``name``,
             and ``tc_type`` (thermocouple type name like "TYPE_K").
         source_id: Stream source identifier.
-        publisher: Stream publisher for sending data batches.
+        publisher: Stream publisher for sending data batches. Optional if only
+            using the instrument for identity/status checks without streaming.
         update_interval: Polling interval in seconds (default 1.0).
 
     Returns:
