@@ -251,6 +251,48 @@ Bring up CAN interface:
 sudo ip link set can0 up type can bitrate 500000
 ```
 
+**MCC DAQ HATs + Waveshare CAN HAT Coexistence**: MCC HATs and Waveshare CAN HATs both use SPI0, but can coexist with hardware modification.
+
+MCC HAT GPIO usage:
+| Function | GPIO Pin |
+|----------|----------|
+| SPI Chip Select | GPIO8 (CE0) - all addresses share this |
+| Address A0 | GPIO12 |
+| Address A1 | GPIO13 |
+| Address A2 | GPIO26 |
+| SPI MISO/MOSI/SCLK | GPIO9/10/11 |
+
+The MCC library uses GPIO12/13/26 to select which board (address 0-7) responds, then communicates via SPI0 CE0. All MCC HATs share CE0, leaving CE1 available.
+
+**Waveshare RS485 CAN HAT (B)** can be modified to use CE1 instead of CE0:
+1. Move the 0Ω resistor on the back from CE0 (GPIO8) position to CE1 (GPIO7) position
+2. Keep interrupt on GPIO25 (do NOT use GPIO13, which conflicts with MCC A1)
+
+Configuration in `/boot/config.txt`:
+```
+# Enable SPI
+dtparam=spi=on
+
+# MCP2515 CAN on spi0.1 (CE1/GPIO7) - modified CAN HAT
+dtoverlay=mcp2515-can1,oscillator=8000000,interrupt=25
+```
+
+Resulting pin allocation:
+| Device | SPI | CS Pin | Other GPIOs |
+|--------|-----|--------|-------------|
+| MCC HATs | spi0.0 | CE0 (GPIO8) | GPIO12/13/26 (address) |
+| CAN HAT (modified) | spi0.1 | CE1 (GPIO7) | GPIO25 (interrupt) |
+
+The `mcp2515-can1` overlay parameters:
+- `oscillator`: Crystal frequency in Hz (check your HAT, typically 8000000 or 16000000)
+- `spimaxfrequency`: SPI clock rate (default 10000000)
+- `interrupt`: GPIO pin for INT (default 25)
+
+Bring up CAN interface:
+```bash
+sudo ip link set can0 up type can bitrate 500000
+```
+
 ### Test Rack Service (hwtest-rack)
 
 FastAPI-based service for rack orchestration and instrument discovery:
