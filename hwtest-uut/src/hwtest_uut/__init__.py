@@ -19,7 +19,7 @@ from hwtest_uut.ads1263 import (
 )
 from hwtest_uut.can_interface import CanConfig, CanInterface, CanMessage
 from hwtest_uut.mcp23017 import Mcp23017, Mcp23017Config, PinDirection
-from hwtest_uut.simulator import SimulatorConfig, UutSimulator
+from hwtest_uut.simulator import CanHeartbeatState, SimulatorConfig, UutSimulator
 
 __version__ = "0.1.0"
 
@@ -38,6 +38,7 @@ __all__ = [
     "Mcp23017Config",
     "PinDirection",
     # Simulator
+    "CanHeartbeatState",
     "SimulatorConfig",
     "UutSimulator",
 ]

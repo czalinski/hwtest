@@ -14,7 +14,7 @@ Each package has its own directory. Use a shared venv or per-package venvs. Exam
 # Setup (shared venv)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-uut[dev]"
+pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-uut[dev]" -e "./hwtest-intg[dev]"
 
 # Testing (run from each package directory)
 cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
@@ -24,6 +24,9 @@ cd hwtest-mcc && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-waveshare && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-rack && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-uut && python3 -m pytest tests/unit/ -v && cd ..
+
+# Integration tests (requires hardware setup)
+cd hwtest-intg && UUT_URL=http://<uut-ip>:8080 python3 -m pytest tests/integration/ -v -m integration && cd ..
 
 # Single file / single test
 python3 -m pytest hwtest-core/tests/unit/test_common_types.py
@@ -53,7 +56,8 @@ hwtest-core  (stdlib-only, no external deps)
   ├── hwtest-mcc  (depends on hwtest-core; optional daqhats)
   ├── hwtest-waveshare  (depends on hwtest-core; optional spidev, lgpio)
   │     └── hwtest-uut  (depends on hwtest-waveshare; fastapi, uvicorn, python-can, smbus2)
-  └── hwtest-rack  (depends on hwtest-core; fastapi, uvicorn, pyyaml)
+  ├── hwtest-rack  (depends on hwtest-core; fastapi, uvicorn, pyyaml)
+  └── hwtest-intg  (depends on hwtest-core, hwtest-rack; python-can, httpx, pytest)
 ```
 
 ### Core Library (hwtest-core)
@@ -143,6 +147,7 @@ Simulated Unit Under Test for integration testing, designed for Raspberry Pi Zer
   - `CanConfig`: Interface configuration (interface name, bitrate, FD mode)
   - Echo mode with configurable ID offset and message filtering
   - Async receive loop with callbacks
+  - Automatic heartbeat at 10 Hz (configurable) with 8-byte incrementing counter
 
 - **ADS1263 ADC** (`ads1263.py`): 32-bit high-precision ADC driver
   - `Ads1263`: SPI driver with software-controlled chip select for SPI bus sharing
@@ -177,6 +182,7 @@ Simulated Unit Under Test for integration testing, designed for Raspberry Pi Zer
   - `POST /can/send`: Send CAN message
   - `GET /can/received`: Get received messages
   - `PUT /can/echo`: Configure echo mode
+  - `GET /can/heartbeat`: Get heartbeat status (running, message count, config)
   - `POST /dac/write`: Write DAC voltage
   - `GET /dac/{channel}`: Read DAC channel
   - `GET /adc/{channel}`: Read ADC channel
@@ -330,6 +336,48 @@ FastAPI-based service for rack orchestration and instrument discovery:
 
 - **Models** (`models.py`): Pydantic response models
   - `InstrumentStatus`, `RackStatus`, `HealthResponse`, `IdentityModel`
+
+### Integration Tests (hwtest-intg)
+
+Integration test package containing tests and reusable fixtures for hardware validation:
+
+- **CAN Interface** (`can/interface.py`): Test rack CAN operations
+  - `RackCanInterface`: Wraps python-can for test rack CAN bus access
+  - `RackCanConfig`: Interface configuration (interface name, bitrate)
+  - `wait_for_heartbeat()`: Wait for UUT heartbeat messages
+  - `echo_test()`: Send message and verify echo response
+  - `collect_messages()`: Collect messages for a duration
+
+- **UUT Client** (`clients/uut_client.py`): Async HTTP client for UUT REST API
+  - `UutClient`: httpx-based client for UUT simulator
+  - `health()`, `status()`: Health and status endpoints
+  - `can_send()`, `can_set_echo()`, `can_get_heartbeat()`: CAN control
+  - `dac_write()`, `dac_read()`: DAC operations
+  - `adc_read()`: ADC operations
+  - `gpio_configure()`, `gpio_write()`, `gpio_read()`: GPIO operations
+
+- **Config Utilities** (`utils/config.py`): Package resource loading
+  - `load_rack_config(name)`: Load YAML configs from package resources
+  - `get_config_path(name)`: Get filesystem path to config file
+
+- **Pytest Fixtures** (`fixtures/conftest.py`): Reusable test fixtures
+  - `rack_can`: Opened CAN interface fixture
+  - `uut_client`: Async HTTP client fixture
+  - `uut_url`: UUT URL from `UUT_URL` environment variable
+  - `can_interface_name`: CAN interface from `CAN_INTERFACE` env var
+
+- **CAN Message ID Constants**:
+  - `UUT_HEARTBEAT_ID = 0x100`: UUT heartbeat message ID
+  - `RACK_TEST_MSG_ID = 0x200`: Rack test message ID
+  - `ECHO_ID_OFFSET = 0x10`: Offset for echoed messages
+
+Run integration tests:
+```bash
+cd hwtest-intg
+UUT_URL=http://192.168.68.xxx:8080 pytest tests/integration/ -v -m integration
+```
+
+The UUT simulator now automatically sends heartbeat messages at 10 Hz when CAN is enabled. The heartbeat contains an 8-byte incrementing counter.
 
 ### Key Design Patterns
 

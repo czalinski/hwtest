@@ -18,6 +18,7 @@ from hwtest_uut.models import (
     AdcChannelResponse,
     AdcStatusResponse,
     CanEchoConfig,
+    CanHeartbeatStatus,
     CanMessageModel,
     CanSendRequest,
     DacChannelResponse,
@@ -265,6 +266,19 @@ async def can_set_echo(config: CanEchoConfig) -> dict[str, str]:
     return {"status": "configured"}
 
 
+@app.get("/can/heartbeat", response_model=CanHeartbeatStatus)
+async def can_get_heartbeat() -> CanHeartbeatStatus:
+    """Get CAN heartbeat status."""
+    sim = get_simulator()
+    state = sim.can_get_heartbeat_state()
+    return CanHeartbeatStatus(
+        running=state.running,
+        message_count=state.message_count,
+        arbitration_id=state.arbitration_id,
+        interval_ms=state.interval_ms,
+    )
+
+
 # -----------------------------------------------------------------------------
 # DAC Endpoints
 # -----------------------------------------------------------------------------
@@ -337,8 +351,7 @@ async def adc_get_status() -> AdcStatusResponse:
         voltages = sim.adc_read_all()
         return AdcStatusResponse(
             channels=[
-                AdcChannelResponse(channel=i, voltage=v, raw=0)
-                for i, v in enumerate(voltages)
+                AdcChannelResponse(channel=i, voltage=v, raw=0) for i, v in enumerate(voltages)
             ]
         )
     except Exception as exc:

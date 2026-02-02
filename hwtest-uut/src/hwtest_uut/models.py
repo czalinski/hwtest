@@ -49,6 +49,15 @@ class CanEchoConfig(BaseModel):
     filter_ids: list[int] | None = None
 
 
+class CanHeartbeatStatus(BaseModel):
+    """Status of the CAN heartbeat."""
+
+    running: bool
+    message_count: int
+    arbitration_id: int
+    interval_ms: int
+
+
 class DacWriteRequest(BaseModel):
     """Request to write DAC voltage."""
 

@@ -27,6 +27,8 @@ class SimulatorConfig:
         can_interface: CAN interface name (e.g., "can0").
         can_bitrate: CAN bitrate in bits/second.
         can_fd: Enable CAN FD mode.
+        can_heartbeat_id: CAN arbitration ID for heartbeat messages.
+        can_heartbeat_interval_ms: Heartbeat interval in milliseconds (0 to disable).
         dac_enabled: Enable DAC output.
         dac_vref: DAC reference voltage.
         adc_enabled: Enable ADC input.
@@ -39,6 +41,8 @@ class SimulatorConfig:
     can_interface: str = "can0"
     can_bitrate: int = 500000
     can_fd: bool = False
+    can_heartbeat_id: int = 0x100
+    can_heartbeat_interval_ms: int = 100
     dac_enabled: bool = True
     dac_vref: float = 5.0
     adc_enabled: bool = True
@@ -54,6 +58,16 @@ class CanEchoState:
     enabled: bool = False
     id_offset: int = 0
     filter_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
+class CanHeartbeatState:
+    """State for CAN heartbeat."""
+
+    running: bool = False
+    message_count: int = 0
+    arbitration_id: int = 0x100
+    interval_ms: int = 100
 
 
 class UutSimulator:
@@ -89,6 +103,11 @@ class UutSimulator:
         self._can: CanInterface | None = None
         self._can_bus = can_bus
         self._can_echo = CanEchoState()
+        self._can_heartbeat = CanHeartbeatState(
+            arbitration_id=self._config.can_heartbeat_id,
+            interval_ms=self._config.can_heartbeat_interval_ms,
+        )
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._can_rx_messages: list[CanMessage] = []
         self._can_rx_max = 100
 
@@ -212,15 +231,21 @@ class UutSimulator:
         logger.info("UUT simulator stopped")
 
     async def run(self) -> None:
-        """Run the simulator with async CAN receive loop.
+        """Run the simulator with async CAN receive loop and heartbeat.
 
         This method blocks until stop() is called.
         """
         if self._can is not None and self._can.is_open:
             await self._can.start_receiving()
+            # Start heartbeat if interval > 0
+            if self._config.can_heartbeat_interval_ms > 0:
+                await self._start_heartbeat()
 
         while self._running:
             await asyncio.sleep(0.1)
+
+        # Stop heartbeat
+        await self._stop_heartbeat()
 
         if self._can is not None:
             await self._can.stop_receiving()
@@ -319,6 +344,70 @@ class UutSimulator:
                     self.can_send(echo_msg)
                 except Exception:  # pylint: disable=broad-exception-caught
                     logger.exception("Failed to echo CAN message")
+
+    # -------------------------------------------------------------------------
+    # CAN Heartbeat
+    # -------------------------------------------------------------------------
+
+    def can_get_heartbeat_state(self) -> CanHeartbeatState:
+        """Get the current heartbeat state.
+
+        Returns:
+            Current heartbeat state including running status and message count.
+        """
+        return self._can_heartbeat
+
+    async def _start_heartbeat(self) -> None:
+        """Start the heartbeat background task."""
+        if self._heartbeat_task is not None:
+            return
+
+        self._can_heartbeat.running = True
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        logger.info(
+            "CAN heartbeat started: ID=0x%03X, interval=%dms",
+            self._can_heartbeat.arbitration_id,
+            self._can_heartbeat.interval_ms,
+        )
+
+    async def _stop_heartbeat(self) -> None:
+        """Stop the heartbeat background task."""
+        self._can_heartbeat.running = False
+
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._heartbeat_task = None
+            logger.info("CAN heartbeat stopped")
+
+    async def _heartbeat_loop(self) -> None:
+        """Background task for sending heartbeat messages."""
+        interval_sec = self._can_heartbeat.interval_ms / 1000.0
+
+        while self._can_heartbeat.running:
+            try:
+                # Build heartbeat data: 8-byte counter (big-endian)
+                count = self._can_heartbeat.message_count
+                data = count.to_bytes(8, byteorder="big")
+
+                msg = CanMessage(
+                    arbitration_id=self._can_heartbeat.arbitration_id,
+                    data=data,
+                )
+                self.can_send(msg)
+                self._can_heartbeat.message_count += 1
+
+                await asyncio.sleep(interval_sec)
+
+            except asyncio.CancelledError:
+                break
+            except Exception:  # pylint: disable=broad-exception-caught
+                if self._can_heartbeat.running:
+                    logger.exception("Error sending heartbeat")
+                    await asyncio.sleep(interval_sec)
 
     # -------------------------------------------------------------------------
     # DAC Operations
