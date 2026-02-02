@@ -14,7 +14,7 @@ Each package has its own directory. Use a shared venv or per-package venvs. Exam
 # Setup (shared venv)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]"
+pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-uut[dev]"
 
 # Testing (run from each package directory)
 cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
@@ -23,6 +23,7 @@ cd hwtest-bkprecision && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-mcc && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-waveshare && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-rack && python3 -m pytest tests/unit/ -v && cd ..
+cd hwtest-uut && python3 -m pytest tests/unit/ -v && cd ..
 
 # Single file / single test
 python3 -m pytest hwtest-core/tests/unit/test_common_types.py
@@ -51,6 +52,7 @@ hwtest-core  (stdlib-only, no external deps)
   │     └── hwtest-bkprecision  (depends on hwtest-scpi)
   ├── hwtest-mcc  (depends on hwtest-core; optional daqhats)
   ├── hwtest-waveshare  (depends on hwtest-core; optional spidev, lgpio)
+  │     └── hwtest-uut  (depends on hwtest-waveshare; fastapi, uvicorn, python-can, smbus2)
   └── hwtest-rack  (depends on hwtest-core; fastapi, uvicorn, pyyaml)
 ```
 
@@ -130,6 +132,55 @@ Drivers for Waveshare HAT boards (Raspberry Pi 5 compatible via lgpio):
   - `Gpio`: Pin management with setup/input/output/close
 
 All Waveshare drivers implement `get_identity()` returning `InstrumentIdentity` with manufacturer="Waveshare".
+
+### UUT Simulator (hwtest-uut)
+
+Simulated Unit Under Test for integration testing, designed for Raspberry Pi Zero:
+
+- **CAN Interface** (`can_interface.py`): SocketCAN wrapper with async support
+  - `CanInterface`: Send/receive CAN messages via python-can
+  - `CanMessage`: Message dataclass with arbitration ID, data, extended ID, CAN FD support
+  - `CanConfig`: Interface configuration (interface name, bitrate, FD mode)
+  - Echo mode with configurable ID offset and message filtering
+  - Async receive loop with callbacks
+
+- **MCP23017 GPIO Expander** (`mcp23017.py`): 16-bit I2C GPIO driver
+  - `Mcp23017`: I2C driver via smbus2
+  - `Mcp23017Config`: I2C bus and address configuration (0x20-0x27)
+  - `PinDirection` enum: INPUT, OUTPUT
+  - Per-pin direction, pull-up resistor control
+  - Port-level and 16-bit read/write operations
+  - `set_pin_direction()`, `write_pin()`, `read_pin()`, `set_pullup()`
+  - `write_port()`, `read_port()`, `write_all()`, `read_all()`
+
+- **UUT Simulator** (`simulator.py`): Main integration class
+  - `UutSimulator`: Combines CAN, GPIO, DAC, and ADC interfaces
+  - `SimulatorConfig`: Enable/disable individual interfaces
+  - CAN echo mode for loopback testing
+  - DAC voltage output (via hwtest-waveshare)
+  - ADC voltage reading (via hwtest-waveshare)
+  - GPIO digital I/O (via MCP23017)
+
+- **REST API Server** (`server.py`): FastAPI-based remote control
+  - `GET /`: HTML dashboard with interface status
+  - `GET /health`: Health check endpoint
+  - `GET /status`: Full simulator status
+  - `POST /can/send`: Send CAN message
+  - `GET /can/received`: Get received messages
+  - `PUT /can/echo`: Configure echo mode
+  - `POST /dac/write`: Write DAC voltage
+  - `GET /dac/{channel}`: Read DAC channel
+  - `GET /adc/{channel}`: Read ADC channel
+  - `POST /gpio/configure`: Set pin direction
+  - `POST /gpio/write`: Write pin value
+  - `GET /gpio/{pin}`: Read pin value
+
+Run the UUT simulator:
+```bash
+uut-simulator --port 8080
+# Or with options:
+uut-simulator --can-interface can0 --gpio-address 0x20 --no-adc --debug
+```
 
 **Raspberry Pi 5 Setup**: The Waveshare HATs require device tree overlays in `/boot/firmware/config.txt`:
 ```
