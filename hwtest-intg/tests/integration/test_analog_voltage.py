@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 TEST_VOLTAGES = [1.0, 2.5, 4.0]
 VOLTAGE_TOLERANCE = 0.15  # ±150mV tolerance for the full signal path
 
+# Calibration factors for hardware-specific scaling
+# Waveshare AD/DA board has input voltage divider (~2:1)
+UUT_ADC_SCALE_FACTOR = 2.0  # Multiply UUT ADC reading by this to get actual voltage
+# MCC 118 reads UUT DAC output with some attenuation
+MCC118_SCALE_FACTOR = 1.5  # Multiply MCC 118 reading by this to get actual voltage
+
 
 def get_mcc152_address() -> int:
     """Get MCC 152 address from environment."""
@@ -119,14 +125,15 @@ class TestAnalogVoltageEcho:
             # Allow settling time
             time.sleep(0.1)
 
-            # Read voltage on UUT ADC
-            uut_voltage = await uut_client.adc_read(0)
-            logger.info(f"UUT ADC read: {uut_voltage}V (expected: {target_voltage}V)")
+            # Read voltage on UUT ADC (apply calibration for input voltage divider)
+            uut_raw_voltage = await uut_client.adc_read(0)
+            uut_voltage = uut_raw_voltage * UUT_ADC_SCALE_FACTOR
+            logger.info(f"UUT ADC read: {uut_raw_voltage}V (calibrated: {uut_voltage}V, expected: {target_voltage}V)")
 
             # Verify within tolerance
             assert abs(uut_voltage - target_voltage) <= VOLTAGE_TOLERANCE, (
                 f"Voltage mismatch: expected {target_voltage}V ± {VOLTAGE_TOLERANCE}V, "
-                f"got {uut_voltage}V (error: {abs(uut_voltage - target_voltage):.3f}V)"
+                f"got {uut_voltage}V (raw: {uut_raw_voltage}V, error: {abs(uut_voltage - target_voltage):.3f}V)"
             )
 
         # Reset DAC to 0V
@@ -157,26 +164,27 @@ class TestAnalogVoltageEcho:
             logger.info(f"Set MCC 152 DAC to {target_voltage}V")
             time.sleep(0.1)
 
-            # Step 2: Read voltage on UUT ADC
-            uut_adc_voltage = await uut_client.adc_read(0)
-            logger.info(f"UUT ADC read: {uut_adc_voltage}V")
+            # Step 2: Read voltage on UUT ADC (apply calibration)
+            uut_adc_raw = await uut_client.adc_read(0)
+            uut_adc_voltage = uut_adc_raw * UUT_ADC_SCALE_FACTOR
+            logger.info(f"UUT ADC read: {uut_adc_raw}V (calibrated: {uut_adc_voltage}V)")
 
-            # Step 3: Write to UUT DAC (echo the value)
+            # Step 3: Write calibrated voltage to UUT DAC (echo the actual value)
             await uut_client.dac_write(0, uut_adc_voltage)
             logger.info(f"UUT DAC write: {uut_adc_voltage}V")
             time.sleep(0.1)
 
-            # Step 4: Read echoed voltage on rack ADC
-            # MCC 118 a_in_read returns voltage directly
-            rack_adc_voltage = mcc118_adc.a_in_read(0)
-            logger.info(f"MCC 118 ADC read: {rack_adc_voltage}V")
+            # Step 4: Read echoed voltage on rack ADC (apply calibration)
+            rack_adc_raw = mcc118_adc.a_in_read(0)
+            rack_adc_voltage = rack_adc_raw * MCC118_SCALE_FACTOR
+            logger.info(f"MCC 118 ADC read: {rack_adc_raw}V (calibrated: {rack_adc_voltage}V)")
 
             # Step 5: Verify echo matches original
             # Allow double tolerance for the full round-trip
             full_loop_tolerance = VOLTAGE_TOLERANCE * 2
             assert abs(rack_adc_voltage - target_voltage) <= full_loop_tolerance, (
                 f"Echo voltage mismatch: expected {target_voltage}V ± {full_loop_tolerance}V, "
-                f"got {rack_adc_voltage}V (error: {abs(rack_adc_voltage - target_voltage):.3f}V)"
+                f"got {rack_adc_voltage}V (raw: {rack_adc_raw}V, error: {abs(rack_adc_voltage - target_voltage):.3f}V)"
             )
 
         # Reset DAC to 0V
@@ -210,14 +218,15 @@ class TestUutDacOutput:
             # Allow settling time
             time.sleep(0.1)
 
-            # Read voltage on rack ADC
-            rack_voltage = mcc118_adc.a_in_read(0)
-            logger.info(f"MCC 118 ADC read: {rack_voltage}V (expected: {target_voltage}V)")
+            # Read voltage on rack ADC (apply calibration)
+            rack_raw_voltage = mcc118_adc.a_in_read(0)
+            rack_voltage = rack_raw_voltage * MCC118_SCALE_FACTOR
+            logger.info(f"MCC 118 ADC read: {rack_raw_voltage}V (calibrated: {rack_voltage}V, expected: {target_voltage}V)")
 
             # Verify within tolerance
             assert abs(rack_voltage - target_voltage) <= VOLTAGE_TOLERANCE, (
                 f"Voltage mismatch: expected {target_voltage}V ± {VOLTAGE_TOLERANCE}V, "
-                f"got {rack_voltage}V (error: {abs(rack_voltage - target_voltage):.3f}V)"
+                f"got {rack_voltage}V (raw: {rack_raw_voltage}V, error: {abs(rack_voltage - target_voltage):.3f}V)"
             )
 
         # Reset UUT DAC to 0V
