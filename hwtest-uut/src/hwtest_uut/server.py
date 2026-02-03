@@ -65,8 +65,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Get config from app state
     config: SimulatorConfig = getattr(app.state, "config", SimulatorConfig())
+    use_waveshare_adda: bool = getattr(app.state, "waveshare_adda", False)
 
-    _simulator = UutSimulator(config=config)
+    # Initialize ADC/DAC if using Waveshare High-Precision AD/DA board
+    dac = None
+    adc = None
+    if use_waveshare_adda:
+        try:
+            from hwtest_waveshare import Ads1256, Dac8532
+
+            if config.dac_enabled:
+                dac = Dac8532()
+                logger.info("Waveshare DAC8532 initialized")
+            if config.adc_enabled:
+                adc = Ads1256()
+                logger.info("Waveshare ADS1256 initialized")
+        except ImportError:
+            logger.warning("hwtest-waveshare not installed, AD/DA disabled")
+        except Exception as exc:
+            logger.warning("Failed to initialize Waveshare AD/DA: %s", exc)
+
+    _simulator = UutSimulator(config=config, dac=dac, adc=adc)
     _simulator.start()
 
     # Start async receive loop
@@ -83,6 +102,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             await _run_task
         except asyncio.CancelledError:
+            pass
+
+    # Close ADC/DAC
+    if adc is not None:
+        try:
+            adc.close()
+        except Exception:
+            pass
+    if dac is not None:
+        try:
+            dac.close()
+        except Exception:
             pass
 
     logger.info("UUT simulator server stopped")
@@ -499,6 +530,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gpio-address", type=lambda x: int(x, 0), default=0x20, help="GPIO I2C address"
     )
+    parser.add_argument(
+        "--waveshare-adda",
+        action="store_true",
+        help="Use Waveshare High-Precision AD/DA board (ADS1256 + DAC8532)",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
@@ -523,6 +559,7 @@ def main() -> None:
     )
 
     app.state.config = config
+    app.state.waveshare_adda = args.waveshare_adda
 
     uvicorn.run(app, host=args.host, port=args.port)
 
