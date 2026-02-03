@@ -139,7 +139,7 @@ All Waveshare drivers implement `get_identity()` returning `InstrumentIdentity` 
 
 ### UUT Simulator (hwtest-uut)
 
-Simulated Unit Under Test for integration testing, designed for Raspberry Pi Zero:
+Simulated Unit Under Test for integration testing. Supports Raspberry Pi 4 (recommended) or Pi Zero:
 
 - **CAN Interface** (`can_interface.py`): SocketCAN wrapper with async support
   - `CanInterface`: Send/receive CAN messages via python-can
@@ -195,6 +195,9 @@ Run the UUT simulator:
 uut-simulator --port 8080
 # Or with options:
 uut-simulator --can-interface can0 --gpio-address 0x20 --no-adc --debug
+
+# For Pi 4 with Waveshare High-Precision AD/DA board:
+uut-simulator --port 8080 --waveshare-adda --no-gpio
 ```
 
 **Raspberry Pi 5 Setup**: The Waveshare HATs require device tree overlays in `/boot/firmware/config.txt`:
@@ -209,53 +212,41 @@ dtoverlay=waveshare-can-fd-hat-mode-a
 dtoverlay=sc16is752-spi1,int_pin=24
 ```
 
-**Raspberry Pi Zero Dual-HAT Setup (CAN + ADC)**: When using both RS485 CAN HAT and High-Precision AD HAT together:
+**Raspberry Pi 4 UUT Setup (CAN FD + AD/DA)**: Recommended UUT configuration using Pi 4 with CAN FD and analog I/O:
 
-Hardware stacking order (bottom to top): Pi Zero → RS485 CAN HAT → High-Precision AD HAT
+Hardware stack (directly stacked):
+- Raspberry Pi 4
+- 2-CH CAN FD HAT rev 2.1 (MCP2518FD controller)
+- High-Precision AD/DA board (ADS1256 ADC + DAC8532 DAC)
 
-Both HATs share the SPI bus but use different chip selects:
-- **RS485 CAN HAT** (MCP2515): Uses kernel driver on spi0.0 with hardware CE0 (GPIO8)
-- **High-Precision AD HAT** (ADS1263): Uses spidev0.1 with software CS on GPIO22
-
-Configuration in `/boot/config.txt`:
+Configuration in `/boot/firmware/config.txt`:
 ```
 # Enable SPI
 dtparam=spi=on
 
-# MCP2515 CAN controller (spi0.0, CE0/GPIO8)
-dtoverlay=mcp2515-can0,oscillator=8000000,interrupt=25
+# 2-CH CAN FD HAT - uses MCP2518FD on SPI0
+dtoverlay=spi1-1cs
+dtoverlay=mcp251xfd,spi0-0,interrupt=25
+dtoverlay=mcp251xfd,spi1-0,interrupt=24
 
-# Enable spidev0.1 for ADC (software CS via GPIO22)
-dtoverlay=spi0-1cs
-```
-
-GPIO pin assignments for ADS1263:
-- DRDY: GPIO17 (data ready signal)
-- RESET: GPIO18 (hardware reset)
-- CS: GPIO22 (software-controlled chip select)
-
-Example configuration:
-```python
-from hwtest_uut import Ads1263, Ads1263Config, CanInterface, CanConfig
-
-# ADC with software CS to share SPI bus
-adc_config = Ads1263Config(
-    spi_bus=0,
-    spi_device=1,   # spidev0.1
-    cs_pin=22,      # Software CS
-    drdy_pin=17,
-    reset_pin=18,
-)
-
-# CAN uses kernel driver (bring up interface first)
-# sudo ip link set can0 up type can bitrate 500000
-can_config = CanConfig(interface="can0", bitrate=500000)
+# High-Precision AD/DA board uses SPI0 CE1 - no overlay needed
 ```
 
 Bring up CAN interface:
 ```bash
+# Standard CAN (500 kbps) - compatible with MCP2515-based rack
 sudo ip link set can0 up type can bitrate 500000
+
+# Or CAN FD mode (500 kbps arbitration, 2 Mbps data)
+sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
 ```
+
+Run the UUT simulator with High-Precision AD/DA:
+```bash
+uut-simulator --port 8080 --can-interface can0 --no-gpio
+```
+
+The simulator automatically uses the hwtest-waveshare ADS1256/DAC8532 drivers when available.
 
 **MCC DAQ HATs + Waveshare CAN HAT Coexistence (Raspberry Pi 5)**: MCC HATs and Waveshare CAN HATs both use SPI0, but can coexist with hardware modification. This configuration has been tested and verified on Raspberry Pi 5.
 
