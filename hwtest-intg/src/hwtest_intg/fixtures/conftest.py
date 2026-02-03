@@ -24,12 +24,12 @@ def uut_url() -> str:
     """Get the UUT simulator URL from environment.
 
     Returns:
-        UUT simulator URL (default: http://localhost:8080).
+        UUT simulator URL (default: http://192.168.68.94:8080 for Pi 4 UUT).
 
     Environment:
         UUT_URL: Override the default URL.
     """
-    return os.environ.get("UUT_URL", "http://localhost:8080")
+    return os.environ.get("UUT_URL", "http://192.168.68.94:8080")
 
 
 @pytest.fixture
