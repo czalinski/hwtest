@@ -1,5 +1,9 @@
 """Interface definitions for hwtest."""
 
+from hwtest_core.interfaces.logger import (
+    Logger,
+    StreamLogger,
+)
 from hwtest_core.interfaces.monitor import (
     Monitor,
     ThresholdProvider,
@@ -18,6 +22,9 @@ from hwtest_core.interfaces.telemetry import (
 )
 
 __all__ = [
+    # Logger interfaces
+    "Logger",
+    "StreamLogger",
     # Streaming interfaces
     "StreamPublisher",
     "StreamSubscriber",

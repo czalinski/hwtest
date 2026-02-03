@@ -14,7 +14,7 @@ Each package has its own directory. Use a shared venv or per-package venvs. Exam
 # Setup (shared venv)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-uut[dev]" -e "./hwtest-intg[dev]"
+pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-uut[dev]" -e "./hwtest-logger[dev]" -e "./hwtest-db[dev]" -e "./hwtest-nats[dev]" -e "./hwtest-intg[dev]"
 
 # Testing (run from each package directory)
 cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
@@ -24,6 +24,9 @@ cd hwtest-mcc && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-waveshare && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-rack && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-uut && python3 -m pytest tests/unit/ -v && cd ..
+cd hwtest-logger && python3 -m pytest tests/unit/ -v && cd ..
+cd hwtest-db && python3 -m pytest tests/unit/ -v && cd ..
+cd hwtest-nats && python3 -m pytest tests/unit/ -v && cd ..
 
 # Integration tests (requires hardware setup)
 cd hwtest-intg && UUT_URL=http://<uut-ip>:8080 python3 -m pytest tests/integration/ -v -m integration && cd ..
@@ -57,6 +60,10 @@ hwtest-core  (stdlib-only, no external deps)
   ├── hwtest-waveshare  (depends on hwtest-core; optional spidev, lgpio)
   │     └── hwtest-uut  (depends on hwtest-waveshare; fastapi, uvicorn, python-can, smbus2)
   ├── hwtest-rack  (depends on hwtest-core; fastapi, uvicorn, pyyaml)
+  ├── hwtest-logger  (depends on hwtest-core; optional influxdb-client)
+  ├── hwtest-db  (aiosqlite; test results persistence)
+  ├── hwtest-nats  (depends on hwtest-core; nats-py)
+  ├── hwtest-testcase  (depends on hwtest-core; optional hwtest-nats)
   └── hwtest-intg  (depends on hwtest-core, hwtest-rack; python-can, httpx, pytest)
 ```
 
@@ -70,7 +77,7 @@ hwtest-core  (stdlib-only, no external deps)
 - `monitor.py`: MonitorVerdict, MonitorResult, ThresholdViolation
 - `streaming.py`: StreamField, StreamSchema (CRC32 ID), StreamData (binary protocol)
 
-**Interfaces** (`src/hwtest_core/interfaces/`): Protocol-based definitions for TelemetryPublisher/Subscriber, StatePublisher/Subscriber, Monitor, ThresholdProvider, StreamPublisher/Subscriber
+**Interfaces** (`src/hwtest_core/interfaces/`): Protocol-based definitions for TelemetryPublisher/Subscriber, StatePublisher/Subscriber, Monitor, ThresholdProvider, StreamPublisher/Subscriber, Logger/StreamLogger
 
 ### SCPI Library (hwtest-scpi)
 
@@ -327,6 +334,187 @@ FastAPI-based service for rack orchestration and instrument discovery:
 
 - **Models** (`models.py`): Pydantic response models
   - `InstrumentStatus`, `RackStatus`, `HealthResponse`, `IdentityModel`
+
+### Telemetry Loggers (hwtest-logger)
+
+Loggers for persisting streaming telemetry data to storage backends:
+
+- **CsvStreamLogger** (`csv_logger.py`): CSV file logger
+  - `CsvStreamLoggerConfig`: Output directory, buffer size, tag-based organization
+  - `register_schema()`: Register schema for a topic before logging
+  - `log()`: Write streaming data batches to CSV
+  - Creates one CSV file per topic with `timestamp_ns` + field columns
+  - Writes `metadata.json` with tags and schema information
+  - Directory structure: `{output_dir}/{test_type}/{test_case_id}/{test_run_id}/`
+
+- **InfluxDbStreamLogger** (`influxdb_logger.py`): InfluxDB time-series logger
+  - `InfluxDbStreamLoggerConfig`: URL, org, bucket, token, batch settings
+  - `register_schema()`: Register schema for a topic before logging
+  - `log()`: Write streaming data as InfluxDB points with tags
+  - `health_check()`: Verify InfluxDB connection health
+  - Point structure: measurement=telemetry, tags from config, fields from schema
+  - Requires `influxdb-client`: `pip install hwtest-logger[influxdb]`
+
+Both loggers implement the `StreamLogger` protocol from `hwtest_core.interfaces`:
+```python
+async def start(tags: dict[str, str]) -> None
+async def stop() -> None
+def register_schema(topic: str, schema: StreamSchema) -> None
+async def log(topic: str, data: StreamData) -> None
+```
+
+### Test Results Database (hwtest-db)
+
+SQLite-based persistence for test results, using the schema in `sql/test_results_schema.sql`:
+
+- **Models** (`models.py`): Dataclasses for database entities
+  - `UnitType`, `DesignRevision`, `Unit`: Product tracking
+  - `TestCase`, `EnvironmentalState`, `Requirement`: Test definitions
+  - `TestRun`, `TestRunUnit`: Test execution
+  - `SystemFailure`, `UnitFailure`: Failure recording
+  - `RunType`, `RunStatus`, `TestOutcome`: Enums
+
+- **Repositories** (`repositories.py`): Async database operations
+  - `UnitRepository`: CRUD for unit types, revisions, units
+  - `TestCaseRepository`: CRUD for test cases, states, requirements
+  - `TestRunRepository`: Test runs, failures, outcomes
+
+- **Connection** (`connection.py`): Database management
+  - `Database`: Async context manager with optional schema creation
+  - `create_database()`, `open_database()`: Low-level functions
+
+Usage:
+```python
+from hwtest_db import Database, UnitRepository, UnitType
+
+async with Database("test_results.db", create=True) as db:
+    repo = UnitRepository(db)
+    unit_type_id = await repo.create_unit_type(
+        UnitType(id=None, name="Widget", description="Test widget")
+    )
+```
+
+### NATS Streaming (hwtest-nats)
+
+NATS/JetStream integration for telemetry streaming. Implements the `StreamPublisher` and `StreamSubscriber` protocols from hwtest-core.
+
+- **Config** (`config.py`): Connection and stream configuration
+  - `NatsConfig`: Server URLs, stream name, subject prefix, authentication
+  - `get_subject()`, `get_schema_subject()`, `get_data_subject()`: Subject generation
+
+- **Connection** (`connection.py`): NATS connection lifecycle
+  - `NatsConnection`: Manages connection, JetStream context, auto-reconnect
+  - `ensure_stream()`: Creates JetStream stream if not exists
+  - Async context manager support
+
+- **Publisher** (`publisher.py`): Stream data publisher
+  - `NatsStreamPublisher`: Publishes data and broadcasts schema every 1 second
+  - Implements `StreamPublisher` protocol
+  - Supports shared or owned connection
+
+- **Subscriber** (`subscriber.py`): Stream data subscriber
+  - `NatsStreamSubscriber`: Receives schema and data messages
+  - `subscribe(source_id)`: Subscribe to a source's data stream
+  - `get_schema()`: Wait for and return schema
+  - `data()`: Async iterator over received data
+
+- **State Management** (`state.py`): Environmental state pub/sub
+  - `NatsStatePublisher`: Publishes state transitions
+  - `NatsStateSubscriber`: Receives state changes
+  - `register_state()`, `get_current_state()`, `transitions()`
+
+- **Monitor** (`monitor.py`): Telemetry threshold monitoring
+  - `TelemetryMonitor`: Evaluates data against state-dependent thresholds
+  - Skips evaluation during state transitions
+  - Publishes monitor results to NATS
+  - Supports violation callbacks
+
+Usage:
+```python
+from hwtest_nats import NatsConfig, NatsStreamPublisher, NatsStreamSubscriber
+from hwtest_core.types.streaming import StreamSchema, StreamField, StreamData
+from hwtest_core.types.common import DataType
+
+# Publisher
+config = NatsConfig.from_url("nats://localhost:4222")
+schema = StreamSchema(source_id="sensor", fields=(StreamField("voltage", DataType.F64, "V"),))
+
+async with NatsStreamPublisher(config, schema) as publisher:
+    data = StreamData(schema_id=schema.schema_id, timestamp_ns=..., period_ns=1_000_000, samples=((3.3,),))
+    await publisher.publish(data)
+
+# Subscriber
+async with NatsStreamSubscriber(config) as subscriber:
+    await subscriber.subscribe("sensor")
+    schema = await subscriber.get_schema(timeout=5.0)
+    async for data in subscriber.data():
+        process(data)
+```
+
+### Test Case Framework (hwtest-testcase)
+
+Framework for creating and executing HASS/HALT test cases:
+
+- **Context** (`context.py`): Test execution context
+  - `TestContext`: Shared state, artifacts, resources across test execution
+  - `set_state()`, `add_artifact()`, `set_resource()`/`get_resource()`
+
+- **Phase** (`phase.py`): Test phase definitions
+  - `TestPhase`: Defines a discrete period with an environmental state
+  - `PhaseResult`, `PhaseStatus`: Phase execution outcomes
+  - Supports pre/main/post actions and skip conditions
+
+- **TestCase** (`testcase.py`): Base class for test implementations
+  - `TestCase`: Abstract base with setup/execute/teardown lifecycle
+  - `TestCaseResult`, `TestStatus`: Test execution outcomes
+  - `run_phase()`: Execute phases with abort support
+
+- **Runner** (`runner.py`): Test execution orchestration
+  - `TestRunner`: Runs multiple test cases
+  - `RunnerConfig`: Sequential/concurrent execution, stop-on-failure, timeouts
+  - `RunnerResult`: Aggregated statistics
+
+Usage:
+```python
+from hwtest_testcase import TestCase, TestPhase, TestRunner, RunnerConfig
+
+class VoltageTest(TestCase):
+    name = "Voltage Stress Test"
+
+    async def setup(self) -> None:
+        self.context.set_resource("psu", await get_psu())
+
+    async def execute(self) -> None:
+        await self.run_phase(TestPhase(name="ambient", state=ambient_state))
+        await self.run_phase(TestPhase(name="stress", state=stress_state))
+
+    async def teardown(self) -> None:
+        psu = self.context.get_resource("psu")
+        await psu.set_output(False)
+
+# Run tests
+runner = TestRunner(config=RunnerConfig(stop_on_failure=True))
+runner.add_test(VoltageTest("test_001"))
+result = await runner.run_all()
+print(f"Passed: {result.passed}/{result.total}")
+```
+
+### Docker Compose (deploy/)
+
+Development services for InfluxDB and Grafana:
+
+```bash
+cd deploy
+docker compose up -d
+
+# Access:
+# - InfluxDB UI: http://localhost:8086 (admin / hwtest-dev-password)
+# - Grafana: http://localhost:3000 (admin / hwtest-dev-password)
+# - InfluxDB token: hwtest-dev-token
+
+# Configure hwtest-logger:
+export INFLUXDB_TOKEN=hwtest-dev-token
+```
 
 ### Integration Tests (hwtest-intg)
 

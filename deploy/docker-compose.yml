@@ -1,0 +1,66 @@
+# Docker Compose for hwtest development services
+#
+# Start services:
+#   docker compose up -d
+#
+# Access InfluxDB UI:
+#   http://localhost:8086
+#   Username: admin
+#   Password: hwtest-dev-password
+#
+# View logs:
+#   docker compose logs -f
+#
+# Stop services:
+#   docker compose down
+#
+# Reset (remove data):
+#   docker compose down -v
+
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: hwtest-influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    environment:
+      # Initial setup (only used on first run)
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: hwtest-dev-password
+      DOCKER_INFLUXDB_INIT_ORG: hwtest
+      DOCKER_INFLUXDB_INIT_BUCKET: telemetry
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: hwtest-dev-token
+      # Retention policy (30 days for development)
+      DOCKER_INFLUXDB_INIT_RETENTION: 720h
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: hwtest-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: hwtest-dev-password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+  grafana-data:
