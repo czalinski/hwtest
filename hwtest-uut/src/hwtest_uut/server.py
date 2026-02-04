@@ -526,8 +526,10 @@ async def failure_get_status() -> FailureStatusResponse:
     return FailureStatusResponse(
         enabled=state.enabled,
         delay_seconds=state.delay_seconds,
+        duration_seconds=state.duration_seconds,
         voltage_offset=state.voltage_offset,
         active=state.active,
+        cycle_count=state.cycle_count,
         time_until_active=sim.failure_time_until_active(),
     )
 
@@ -538,6 +540,7 @@ async def failure_configure(request: FailureConfigRequest) -> dict[str, str]:
     sim = get_simulator()
     sim.failure_configure(
         delay_seconds=request.delay_seconds,
+        duration_seconds=request.duration_seconds,
         voltage_offset=request.voltage_offset,
     )
     return {"status": "configured"}
@@ -582,6 +585,12 @@ def parse_args() -> argparse.Namespace:
         help="Failure injection delay in seconds (0 to disable)",
     )
     parser.add_argument(
+        "--failure-duration",
+        type=float,
+        default=10.0,
+        help="Failure duration in seconds before recovery (0 for permanent, default: 10)",
+    )
+    parser.add_argument(
         "--failure-offset",
         type=float,
         default=1.0,
@@ -609,13 +618,17 @@ def main() -> None:
         gpio_enabled=not args.no_gpio,
         gpio_address=args.gpio_address,
         failure_delay_seconds=args.failure_delay,
+        failure_duration_seconds=args.failure_duration,
         failure_voltage_offset=args.failure_offset,
     )
 
     if args.failure_delay > 0:
+        mode = "cyclic" if args.failure_duration > 0 else "permanent"
         logger.info(
-            "Failure injection enabled: delay=%.1fs, offset=+%.2fV",
+            "Failure injection enabled: delay=%.1fs, duration=%.1fs (%s), offset=+%.2fV",
             args.failure_delay,
+            args.failure_duration,
+            mode,
             args.failure_offset,
         )
 

@@ -36,6 +36,7 @@ class SimulatorConfig:
         gpio_i2c_bus: I2C bus number for GPIO expander.
         gpio_address: I2C address for GPIO expander (0x20-0x27).
         failure_delay_seconds: Delay before failure injection activates (0 to disable).
+        failure_duration_seconds: How long failure stays active before recovery (0 for permanent).
         failure_voltage_offset: Voltage offset to add when failure is active.
     """
 
@@ -52,6 +53,7 @@ class SimulatorConfig:
     gpio_i2c_bus: int = 1
     gpio_address: int = 0x20
     failure_delay_seconds: float = 0.0
+    failure_duration_seconds: float = 10.0
     failure_voltage_offset: float = 1.0
 
 
@@ -76,13 +78,19 @@ class CanHeartbeatState:
 
 @dataclass
 class FailureState:
-    """State for failure injection."""
+    """State for failure injection.
+
+    Supports cyclic failure: fail after delay, recover after duration, repeat.
+    If duration_seconds is 0, failure is permanent once triggered.
+    """
 
     enabled: bool = False
     delay_seconds: float = 0.0
+    duration_seconds: float = 10.0
     voltage_offset: float = 1.0
     start_time: float | None = None
     active: bool = False
+    cycle_count: int = 0
 
 
 class UutSimulator:
@@ -141,6 +149,7 @@ class UutSimulator:
         self._failure = FailureState(
             enabled=self._config.failure_delay_seconds > 0,
             delay_seconds=self._config.failure_delay_seconds,
+            duration_seconds=self._config.failure_duration_seconds,
             voltage_offset=self._config.failure_voltage_offset,
         )
 
@@ -462,19 +471,48 @@ class UutSimulator:
                 self._failure.voltage_offset,
             )
 
-        # Check if failure should activate
+        # Check if failure should activate (supports cyclic failure)
         output_voltage = voltage
         if self._failure.enabled and self._failure.start_time is not None:
             elapsed = time.time() - self._failure.start_time
-            if elapsed >= self._failure.delay_seconds:
-                if not self._failure.active:
-                    self._failure.active = True
-                    logger.warning(
-                        "Failure injection ACTIVATED after %.1fs (offset: +%.2fV)",
-                        elapsed,
-                        self._failure.voltage_offset,
-                    )
-                # Apply voltage offset, clamped to DAC range
+
+            # Determine if failure should be active
+            should_be_active = False
+            if self._failure.duration_seconds <= 0:
+                # Permanent failure mode (no recovery)
+                should_be_active = elapsed >= self._failure.delay_seconds
+            else:
+                # Cyclic failure mode: fail for duration, recover for delay, repeat
+                cycle_period = self._failure.delay_seconds + self._failure.duration_seconds
+                position_in_cycle = elapsed % cycle_period
+                cycle_num = int(elapsed // cycle_period)
+
+                # Within each cycle: normal for delay, then failure for duration
+                should_be_active = position_in_cycle >= self._failure.delay_seconds
+
+                # Track cycle count
+                if cycle_num > self._failure.cycle_count:
+                    self._failure.cycle_count = cycle_num
+
+            # Handle state transitions
+            if should_be_active and not self._failure.active:
+                self._failure.active = True
+                logger.warning(
+                    "Failure injection ACTIVATED after %.1fs (offset: +%.2fV, cycle: %d)",
+                    elapsed,
+                    self._failure.voltage_offset,
+                    self._failure.cycle_count,
+                )
+            elif not should_be_active and self._failure.active:
+                self._failure.active = False
+                logger.info(
+                    "Failure injection RECOVERED after %.1fs (cycle: %d)",
+                    elapsed,
+                    self._failure.cycle_count,
+                )
+
+            # Apply voltage offset if failure is active
+            if self._failure.active:
                 output_voltage = min(voltage + self._failure.voltage_offset, self._config.dac_vref)
 
         if self._dac is not None:
@@ -687,12 +725,14 @@ class UutSimulator:
     def failure_configure(
         self,
         delay_seconds: float | None = None,
+        duration_seconds: float | None = None,
         voltage_offset: float | None = None,
     ) -> None:
         """Configure failure injection parameters.
 
         Args:
             delay_seconds: New delay in seconds (0 to disable). If None, unchanged.
+            duration_seconds: How long failure stays active (0 for permanent). If None, unchanged.
             voltage_offset: New voltage offset in volts. If None, unchanged.
         """
         if delay_seconds is not None:
@@ -701,10 +741,19 @@ class UutSimulator:
             # Reset state if disabling or changing delay
             self._failure.start_time = None
             self._failure.active = False
+            self._failure.cycle_count = 0
             logger.info(
                 "Failure injection %s (delay: %.1fs)",
                 "enabled" if self._failure.enabled else "disabled",
                 delay_seconds,
+            )
+
+        if duration_seconds is not None:
+            self._failure.duration_seconds = duration_seconds
+            logger.info(
+                "Failure duration set to %.1fs (%s)",
+                duration_seconds,
+                "cyclic" if duration_seconds > 0 else "permanent",
             )
 
         if voltage_offset is not None:
@@ -714,11 +763,12 @@ class UutSimulator:
     def failure_reset(self) -> None:
         """Reset failure injection state without changing configuration.
 
-        This clears the start time and active flag, allowing the failure
-        sequence to begin again on the next DAC write.
+        This clears the start time, active flag, and cycle count, allowing
+        the failure sequence to begin again on the next DAC write.
         """
         self._failure.start_time = None
         self._failure.active = False
+        self._failure.cycle_count = 0
         logger.info("Failure injection state reset")
 
     def failure_time_until_active(self) -> float | None:

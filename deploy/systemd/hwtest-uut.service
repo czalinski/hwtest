@@ -1,0 +1,30 @@
+[Unit]
+Description=HWTest UUT Simulator
+After=network.target can0.service
+Wants=can0.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi
+Environment="PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+# UUT simulator with cyclic failure injection:
+# - failure-delay: 300s (5 minutes) before failure activates
+# - failure-duration: 10s failure stays active before recovery
+# - failure-offset: +1.0V added to DAC output during failure
+ExecStart=/home/pi/.local/bin/uut-simulator \
+    --port 8080 \
+    --can-interface can0 \
+    --waveshare-adda \
+    --no-gpio \
+    --failure-delay 300 \
+    --failure-duration 10 \
+    --failure-offset 1.0
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
