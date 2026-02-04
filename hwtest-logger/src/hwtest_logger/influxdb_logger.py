@@ -84,12 +84,18 @@ class InfluxDbStreamLogger:  # pylint: disable=too-many-instance-attributes
         """
         self._schemas[topic] = schema
 
-    async def log(self, topic: str, data: StreamData) -> None:
+    async def log(
+        self,
+        topic: str,
+        data: StreamData,
+        extra_tags: dict[str, str] | None = None,
+    ) -> None:
         """Log a batch of streaming data.
 
         Args:
             topic: The topic this data belongs to.
             data: The streaming data batch to log.
+            extra_tags: Optional additional tags to add to each point.
 
         Raises:
             ValueError: If no schema registered for the topic.
@@ -126,6 +132,11 @@ class InfluxDbStreamLogger:  # pylint: disable=too-many-instance-attributes
             # Add all configured tags
             for tag_key, tag_value in self._tags.items():
                 point.tag(tag_key, tag_value)
+
+            # Add per-point extra tags
+            if extra_tags:
+                for tag_key, tag_value in extra_tags.items():
+                    point.tag(tag_key, tag_value)
 
             # Add field values
             for field_def, value in zip(schema.fields, sample):

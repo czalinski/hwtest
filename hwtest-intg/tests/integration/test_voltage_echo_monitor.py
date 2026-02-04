@@ -80,8 +80,8 @@ VOLTAGE_TOLERANCE = 0.30  # V (±300mV for full round-trip)
 UUT_ADC_SCALE_FACTOR = 2.0  # Input voltage divider on Waveshare AD/DA
 MCC118_SCALE_FACTOR = 1.5  # Attenuation on MCC 118 input
 
-# Settling time between voltage changes
-SETTLING_TIME = 0.1  # seconds
+# Settling time between voltage changes (25ms allows ~10 Hz with HTTP overhead)
+SETTLING_TIME = 0.025  # seconds
 
 # Channel ID for the echoed voltage measurement
 ECHO_VOLTAGE_CHANNEL = ChannelId("echo_voltage")
@@ -105,6 +105,24 @@ def get_influxdb_config() -> dict[str, Any]:
         "bucket": os.environ.get("INFLUXDB_BUCKET", "telemetry"),
         "token": os.environ.get("INFLUXDB_TOKEN"),
     }
+
+
+def get_rack_id() -> str:
+    """Get rack ID from environment."""
+    return os.environ.get("RACK_ID", "pi5-mcc-intg-a")
+
+
+def get_uut_id() -> str:
+    """Get UUT ID from environment or URL."""
+    uut_id = os.environ.get("UUT_ID")
+    if uut_id:
+        return uut_id
+    # Extract from UUT_URL if set
+    uut_url = os.environ.get("UUT_URL", "localhost")
+    # Use hostname/IP as identifier
+    if "://" in uut_url:
+        uut_url = uut_url.split("://")[1]
+    return uut_url.split(":")[0].replace(".", "-")
 
 
 # Telemetry schema for voltage echo measurements
@@ -539,6 +557,8 @@ async def telemetry_logger() -> AsyncGenerator[Any, None]:
         "test_type": test_mode.value.upper(),
         "test_case_id": "voltage_echo_monitor",
         "test_run_id": test_run_id,
+        "rack_id": get_rack_id(),
+        "uut_id": get_uut_id(),
     }
 
     try:
@@ -631,8 +651,11 @@ class TestVoltageEchoMonitor:
             samples=(readings.as_tuple(),),
         )
 
+        # Add state_name as a per-point tag for efficient filtering
+        extra_tags = {"state": readings.state_name.lower()}
+
         try:
-            await telemetry_logger.log("voltage_echo", data)
+            await telemetry_logger.log("voltage_echo", data, extra_tags=extra_tags)
         except Exception as exc:
             logger.warning("Failed to log telemetry: %s", exc)
 
