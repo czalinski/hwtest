@@ -155,3 +155,20 @@ class ErrorResponse(BaseModel):
 
     error: str
     detail: str | None = None
+
+
+class FailureStatusResponse(BaseModel):
+    """Response for failure injection status."""
+
+    enabled: bool
+    delay_seconds: float
+    voltage_offset: float
+    active: bool
+    time_until_active: float | None
+
+
+class FailureConfigRequest(BaseModel):
+    """Request to configure failure injection."""
+
+    delay_seconds: float | None = Field(default=None, ge=0.0)
+    voltage_offset: float | None = Field(default=None, ge=0.0, le=5.0)

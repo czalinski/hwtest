@@ -141,19 +141,36 @@ class TestDashboard:
         assert "B&amp;K Precision" in response.text or "B&K Precision" in response.text
 
 
+class MockInstrument:
+    """Mock instrument that satisfies the Instrument protocol."""
+
+    def __init__(self, identity: InstrumentIdentity) -> None:
+        self._identity = identity
+
+    def get_identity(self) -> InstrumentIdentity:
+        return self._identity
+
+    def open(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 class TestRackIntegration:
     def test_rack_with_mock_instrument(self) -> None:
         """Test rack initialization with a mock instrument factory."""
-        # Create a mock instrument
-        mock_instrument = MagicMock()
-        mock_instrument.get_identity.return_value = InstrumentIdentity(
-            manufacturer="Test Co",
-            model="TestModel",
-            serial="12345",
-            firmware="1.0",
+        # Create a mock instrument that satisfies the Instrument protocol
+        mock_instrument = MockInstrument(
+            InstrumentIdentity(
+                manufacturer="Test Co",
+                model="TestModel",
+                serial="12345",
+                firmware="1.0",
+            )
         )
 
-        def mock_factory(**kwargs: object) -> MagicMock:
+        def mock_factory(**kwargs: object) -> MockInstrument:
             return mock_instrument
 
         config = RackConfig(
@@ -184,15 +201,16 @@ class TestRackIntegration:
 
     def test_rack_identity_mismatch(self) -> None:
         """Test that rack detects identity mismatch."""
-        mock_instrument = MagicMock()
-        mock_instrument.get_identity.return_value = InstrumentIdentity(
-            manufacturer="Wrong Co",
-            model="WrongModel",
-            serial="12345",
-            firmware="1.0",
+        mock_instrument = MockInstrument(
+            InstrumentIdentity(
+                manufacturer="Wrong Co",
+                model="WrongModel",
+                serial="12345",
+                firmware="1.0",
+            )
         )
 
-        def mock_factory(**kwargs: object) -> MagicMock:
+        def mock_factory(**kwargs: object) -> MockInstrument:
             return mock_instrument
 
         config = RackConfig(

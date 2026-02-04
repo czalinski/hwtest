@@ -29,9 +29,7 @@ def load_driver(driver_path: str) -> Callable[..., Any]:
     module_path, func_name = driver_path.rsplit(":", 1)
 
     if not module_path or not func_name:
-        raise ValueError(
-            f"Invalid driver path '{driver_path}': module and function names required"
-        )
+        raise ValueError(f"Invalid driver path '{driver_path}': module and function names required")
 
     try:
         module = importlib.import_module(module_path)
@@ -41,9 +39,7 @@ def load_driver(driver_path: str) -> Callable[..., Any]:
     try:
         factory = getattr(module, func_name)
     except AttributeError as exc:
-        raise AttributeError(
-            f"Module '{module_path}' has no attribute '{func_name}'"
-        ) from exc
+        raise AttributeError(f"Module '{module_path}' has no attribute '{func_name}'") from exc
 
     if not callable(factory):
         raise TypeError(f"'{driver_path}' is not callable")

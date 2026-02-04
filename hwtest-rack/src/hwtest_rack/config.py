@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from hwtest_rack.channel import ChannelRegistry, ChannelType, LogicalChannel
+
 
 @dataclass(frozen=True)
 class ExpectedIdentity:
@@ -23,6 +25,23 @@ class ExpectedIdentity:
 
 
 @dataclass(frozen=True)
+class ChannelConfig:
+    """Configuration for a logical channel on an instrument.
+
+    Args:
+        id: Physical channel ID on the instrument.
+        logical_name: Logical name for this channel.
+        channel_type: Type of channel (psu, load, daq_analog, daq_digital).
+        metadata: Additional channel-specific configuration.
+    """
+
+    id: int
+    logical_name: str
+    channel_type: ChannelType
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class InstrumentConfig:
     """Configuration for a single instrument in the rack.
 
@@ -31,12 +50,14 @@ class InstrumentConfig:
         driver: Driver path in "module:function" format.
         identity: Expected identity for verification.
         kwargs: Additional keyword arguments passed to the driver factory.
+        channels: Logical channel configurations (extracted from kwargs).
     """
 
     name: str
     driver: str
     identity: ExpectedIdentity
     kwargs: dict[str, Any] = field(default_factory=dict)
+    channels: tuple[ChannelConfig, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -47,11 +68,172 @@ class RackConfig:
         rack_id: Unique identifier for this rack.
         description: Human-readable description.
         instruments: Instrument configurations.
+        channel_registry: Registry of logical channel names.
     """
 
     rack_id: str
     description: str
     instruments: tuple[InstrumentConfig, ...]
+    channel_registry: ChannelRegistry = field(default_factory=ChannelRegistry)
+
+
+def _infer_channel_type(driver: str, channel_data: dict[str, Any]) -> ChannelType:
+    """Infer the channel type from the driver path and channel data.
+
+    Args:
+        driver: Driver path (module:function format).
+        channel_data: Channel configuration dictionary.
+
+    Returns:
+        Inferred ChannelType.
+    """
+    # Check for explicit type in channel data
+    if "type" in channel_data:
+        type_str = channel_data["type"].lower()
+        try:
+            return ChannelType(type_str)
+        except ValueError:
+            pass
+
+    # Infer from driver path
+    driver_lower = driver.lower()
+    if "psu" in driver_lower or "power" in driver_lower:
+        return ChannelType.PSU
+    if "load" in driver_lower:
+        return ChannelType.LOAD
+    if "mcc118" in driver_lower or "mcc134" in driver_lower or "ads" in driver_lower:
+        return ChannelType.DAQ_ANALOG
+    if "mcc152" in driver_lower and channel_data.get("direction"):
+        return ChannelType.DAQ_DIGITAL
+    if "dac" in driver_lower or "adc" in driver_lower:
+        return ChannelType.DAQ_ANALOG
+
+    # Default to analog DAQ
+    return ChannelType.DAQ_ANALOG
+
+
+def _parse_channels(
+    instrument_name: str,
+    driver: str,
+    kwargs: dict[str, Any],
+) -> tuple[ChannelConfig, ...]:
+    """Parse channel configurations from instrument kwargs.
+
+    Looks for 'channels' key in kwargs and extracts logical names.
+    Also checks for 'dio_channels' and 'analog_channels' for MCC 152.
+
+    Args:
+        instrument_name: Name of the instrument.
+        driver: Driver path.
+        kwargs: Instrument kwargs.
+
+    Returns:
+        Tuple of ChannelConfig objects.
+    """
+    channels: list[ChannelConfig] = []
+
+    # Standard channels list (PSU, MCC 118, MCC 134, etc.)
+    if "channels" in kwargs:
+        for ch_data in kwargs["channels"]:
+            if not isinstance(ch_data, dict):
+                continue
+
+            ch_id = ch_data.get("id")
+            logical_name = ch_data.get("logical_name") or ch_data.get("name")
+
+            if ch_id is None or logical_name is None:
+                continue
+
+            channel_type = _infer_channel_type(driver, ch_data)
+
+            # Extract metadata (everything except id/name/type)
+            metadata = {
+                k: v for k, v in ch_data.items() if k not in ("id", "logical_name", "name", "type")
+            }
+
+            channels.append(
+                ChannelConfig(
+                    id=ch_id,
+                    logical_name=logical_name,
+                    channel_type=channel_type,
+                    metadata=metadata,
+                )
+            )
+
+    # MCC 152 dio_channels
+    if "dio_channels" in kwargs:
+        for ch_data in kwargs["dio_channels"]:
+            if not isinstance(ch_data, dict):
+                continue
+
+            ch_id = ch_data.get("id")
+            logical_name = ch_data.get("logical_name") or ch_data.get("name")
+
+            if ch_id is None or logical_name is None:
+                continue
+
+            metadata = {k: v for k, v in ch_data.items() if k not in ("id", "logical_name", "name")}
+
+            channels.append(
+                ChannelConfig(
+                    id=ch_id,
+                    logical_name=logical_name,
+                    channel_type=ChannelType.DAQ_DIGITAL,
+                    metadata=metadata,
+                )
+            )
+
+    # MCC 152 analog_channels
+    if "analog_channels" in kwargs:
+        for ch_data in kwargs["analog_channels"]:
+            if not isinstance(ch_data, dict):
+                continue
+
+            ch_id = ch_data.get("id")
+            logical_name = ch_data.get("logical_name") or ch_data.get("name")
+
+            if ch_id is None or logical_name is None:
+                continue
+
+            metadata = {k: v for k, v in ch_data.items() if k not in ("id", "logical_name", "name")}
+
+            channels.append(
+                ChannelConfig(
+                    id=ch_id,
+                    logical_name=logical_name,
+                    channel_type=ChannelType.DAQ_ANALOG,
+                    metadata=metadata,
+                )
+            )
+
+    return tuple(channels)
+
+
+def _build_channel_registry(
+    instruments: list[InstrumentConfig],
+) -> ChannelRegistry:
+    """Build a channel registry from instrument configurations.
+
+    Args:
+        instruments: List of instrument configurations.
+
+    Returns:
+        Populated ChannelRegistry.
+    """
+    registry = ChannelRegistry()
+
+    for inst in instruments:
+        for ch_config in inst.channels:
+            logical_channel = LogicalChannel(
+                logical_name=ch_config.logical_name,
+                instrument_name=inst.name,
+                channel_id=ch_config.id,
+                channel_type=ch_config.channel_type,
+                metadata=ch_config.metadata,
+            )
+            registry.register(logical_channel)
+
+    return registry
 
 
 def load_config(path: str | Path) -> RackConfig:
@@ -113,17 +295,25 @@ def load_config(path: str | Path) -> RackConfig:
         if not isinstance(kwargs, dict):
             raise ValueError(f"Instrument '{name}' kwargs must be a mapping")
 
+        # Parse channel configurations
+        channels = _parse_channels(name, driver, kwargs)
+
         instruments.append(
             InstrumentConfig(
                 name=name,
                 driver=driver,
                 identity=identity,
                 kwargs=kwargs,
+                channels=channels,
             )
         )
+
+    # Build the channel registry
+    channel_registry = _build_channel_registry(instruments)
 
     return RackConfig(
         rack_id=rack_id,
         description=description,
         instruments=tuple(instruments),
+        channel_registry=channel_registry,
     )

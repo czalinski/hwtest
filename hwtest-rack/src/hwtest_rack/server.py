@@ -53,8 +53,9 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
             config = load_config(cfg_path)
             _rack = Rack(config)
             _rack.initialize()
-            logger.info("Rack '%s' initialized with %d instruments",
-                        _rack.rack_id, len(config.instruments))
+            logger.info(
+                "Rack '%s' initialized with %d instruments", _rack.rack_id, len(config.instruments)
+            )
 
         yield
 
@@ -74,10 +75,12 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
     app.add_api_route("/", _dashboard, methods=["GET"], response_class=HTMLResponse)
     app.add_api_route("/health", _health, methods=["GET"], response_model=HealthResponse)
     app.add_api_route("/status", _status, methods=["GET"], response_model=RackStatus)
-    app.add_api_route("/instruments", _list_instruments, methods=["GET"],
-                      response_model=list[InstrumentStatus])
-    app.add_api_route("/instruments/{name}", _get_instrument, methods=["GET"],
-                      response_model=InstrumentStatus)
+    app.add_api_route(
+        "/instruments", _list_instruments, methods=["GET"], response_model=list[InstrumentStatus]
+    )
+    app.add_api_route(
+        "/instruments/{name}", _get_instrument, methods=["GET"], response_model=InstrumentStatus
+    )
 
     return app
 
@@ -262,9 +265,7 @@ async def _get_instrument(name: str) -> InstrumentStatus:
 
 def main() -> None:
     """Command-line entry point."""
-    parser = argparse.ArgumentParser(
-        description="Start the hwtest rack server"
-    )
+    parser = argparse.ArgumentParser(description="Start the hwtest rack server")
     parser.add_argument(
         "config",
         type=Path,

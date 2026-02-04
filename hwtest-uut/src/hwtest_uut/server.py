@@ -26,6 +26,8 @@ from hwtest_uut.models import (
     DacWriteBothRequest,
     DacWriteRequest,
     ErrorResponse,
+    FailureConfigRequest,
+    FailureStatusResponse,
     GpioPinConfig,
     GpioPinResponse,
     GpioPinWriteRequest,
@@ -512,6 +514,44 @@ async def gpio_read_pin(pin: int) -> GpioPinResponse:
 
 
 # -----------------------------------------------------------------------------
+# Failure Injection Endpoints
+# -----------------------------------------------------------------------------
+
+
+@app.get("/failure/status", response_model=FailureStatusResponse)
+async def failure_get_status() -> FailureStatusResponse:
+    """Get failure injection status."""
+    sim = get_simulator()
+    state = sim.failure_get_state()
+    return FailureStatusResponse(
+        enabled=state.enabled,
+        delay_seconds=state.delay_seconds,
+        voltage_offset=state.voltage_offset,
+        active=state.active,
+        time_until_active=sim.failure_time_until_active(),
+    )
+
+
+@app.put("/failure/config")
+async def failure_configure(request: FailureConfigRequest) -> dict[str, str]:
+    """Configure failure injection parameters."""
+    sim = get_simulator()
+    sim.failure_configure(
+        delay_seconds=request.delay_seconds,
+        voltage_offset=request.voltage_offset,
+    )
+    return {"status": "configured"}
+
+
+@app.post("/failure/reset")
+async def failure_reset() -> dict[str, str]:
+    """Reset failure injection state (timer and active flag)."""
+    sim = get_simulator()
+    sim.failure_reset()
+    return {"status": "reset"}
+
+
+# -----------------------------------------------------------------------------
 # CLI Entry Point
 # -----------------------------------------------------------------------------
 
@@ -535,6 +575,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use Waveshare High-Precision AD/DA board (ADS1256 + DAC8532)",
     )
+    parser.add_argument(
+        "--failure-delay",
+        type=float,
+        default=0.0,
+        help="Failure injection delay in seconds (0 to disable)",
+    )
+    parser.add_argument(
+        "--failure-offset",
+        type=float,
+        default=1.0,
+        help="Failure injection voltage offset in volts (default: 1.0)",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
@@ -556,7 +608,16 @@ def main() -> None:
         adc_enabled=not args.no_adc,
         gpio_enabled=not args.no_gpio,
         gpio_address=args.gpio_address,
+        failure_delay_seconds=args.failure_delay,
+        failure_voltage_offset=args.failure_offset,
     )
+
+    if args.failure_delay > 0:
+        logger.info(
+            "Failure injection enabled: delay=%.1fs, offset=+%.2fV",
+            args.failure_delay,
+            args.failure_offset,
+        )
 
     app.state.config = config
     app.state.waveshare_adda = args.waveshare_adda

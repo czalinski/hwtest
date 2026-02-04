@@ -8,6 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from hwtest_core.types.common import InstrumentIdentity
 
+from hwtest_rack.channel import ChannelRegistry, ChannelType, LogicalChannel
 from hwtest_rack.config import InstrumentConfig, RackConfig
 from hwtest_rack.loader import load_driver
 from hwtest_rack.models import (
@@ -16,6 +17,7 @@ from hwtest_rack.models import (
     InstrumentStatus,
     RackStatus,
 )
+from hwtest_rack.protocols import DcPsuChannel
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +55,22 @@ class Rack:
     """Test rack orchestrator.
 
     Manages loading, initializing, and monitoring instruments.
+    Provides access to instruments by name and channels by logical name.
 
     Args:
         config: Rack configuration.
+
+    Example:
+        config = load_config("rack.yaml")
+        rack = Rack(config)
+        rack.initialize()
+
+        # Access instrument by name
+        psu = rack.get_instrument("dc_psu_slot_3")
+
+        # Access channel by logical name
+        battery = rack.get_psu_channel("main_battery")
+        battery.set_voltage(12.0)
     """
 
     config: RackConfig
@@ -118,9 +133,7 @@ class Rack:
                             f"got '{identity.manufacturer}'"
                         )
                         all_ready = False
-                        logger.error(
-                            "Instrument %s: %s", name, managed.error
-                        )
+                        logger.error("Instrument %s: %s", name, managed.error)
                         continue
 
                     if identity.model != expected.model:
@@ -130,9 +143,7 @@ class Rack:
                             f"got '{identity.model}'"
                         )
                         all_ready = False
-                        logger.error(
-                            "Instrument %s: %s", name, managed.error
-                        )
+                        logger.error("Instrument %s: %s", name, managed.error)
                         continue
 
                 managed.state = InstrumentState.READY
@@ -255,3 +266,120 @@ class Rack:
             List of instrument statuses.
         """
         return self.get_status().instruments
+
+    # -------------------------------------------------------------------------
+    # Logical Channel Access
+    # -------------------------------------------------------------------------
+
+    @property
+    def channel_registry(self) -> ChannelRegistry:
+        """Return the channel registry for this rack."""
+        return self.config.channel_registry
+
+    def get_logical_channel(self, logical_name: str) -> LogicalChannel | None:
+        """Get a logical channel by name.
+
+        Args:
+            logical_name: The logical channel name.
+
+        Returns:
+            LogicalChannel info, or None if not found.
+        """
+        return self.config.channel_registry.get(logical_name)
+
+    def resolve_channel(self, logical_name: str) -> tuple[Any, int] | None:
+        """Resolve a logical name to an instrument instance and channel ID.
+
+        Args:
+            logical_name: The logical channel name.
+
+        Returns:
+            Tuple of (instrument_instance, channel_id), or None if not found.
+        """
+        channel = self.config.channel_registry.get(logical_name)
+        if channel is None:
+            return None
+
+        instrument = self.get_instrument(channel.instrument_name)
+        if instrument is None:
+            return None
+
+        return (instrument, channel.channel_id)
+
+    def get_psu_channel(self, logical_name: str) -> DcPsuChannel | None:
+        """Get a PSU channel by logical name.
+
+        The instrument must implement the MultiChannelPsu protocol
+        (have a get_channel_by_name method).
+
+        Args:
+            logical_name: The logical channel name.
+
+        Returns:
+            DcPsuChannel interface, or None if not found.
+        """
+        channel = self.config.channel_registry.get(logical_name)
+        if channel is None:
+            logger.warning("Logical channel '%s' not found", logical_name)
+            return None
+
+        if channel.channel_type != ChannelType.PSU:
+            logger.warning(
+                "Channel '%s' is type %s, not PSU",
+                logical_name,
+                channel.channel_type.value,
+            )
+            return None
+
+        instrument = self.get_instrument(channel.instrument_name)
+        if instrument is None:
+            logger.warning(
+                "Instrument '%s' for channel '%s' not ready",
+                channel.instrument_name,
+                logical_name,
+            )
+            return None
+
+        # Try to get channel by name (MultiChannelPsu protocol)
+        if hasattr(instrument, "get_channel_by_name"):
+            psu_channel = instrument.get_channel_by_name(logical_name)
+            if psu_channel is not None:
+                return psu_channel
+
+        # Try to get channel by ID
+        if hasattr(instrument, "get_channel"):
+            try:
+                return instrument.get_channel(channel.channel_id)
+            except (KeyError, IndexError):
+                pass
+
+        logger.warning(
+            "Instrument '%s' does not support channel access",
+            channel.instrument_name,
+        )
+        return None
+
+    def list_logical_channels(
+        self,
+        channel_type: ChannelType | None = None,
+    ) -> list[LogicalChannel]:
+        """List all logical channels, optionally filtered by type.
+
+        Args:
+            channel_type: Optional type filter.
+
+        Returns:
+            List of LogicalChannel info.
+        """
+        if channel_type is None:
+            return self.config.channel_registry.list_all()
+        return self.config.channel_registry.get_by_type(channel_type)
+
+    def list_psu_channels(self) -> list[str]:
+        """List all PSU logical channel names.
+
+        Returns:
+            List of logical names for PSU channels.
+        """
+        channels = self.config.channel_registry.get_by_type(ChannelType.PSU)
+        return [ch.logical_name for ch in channels]

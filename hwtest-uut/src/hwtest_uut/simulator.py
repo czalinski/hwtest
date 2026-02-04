@@ -35,6 +35,8 @@ class SimulatorConfig:
         gpio_enabled: Enable MCP23017 GPIO expander.
         gpio_i2c_bus: I2C bus number for GPIO expander.
         gpio_address: I2C address for GPIO expander (0x20-0x27).
+        failure_delay_seconds: Delay before failure injection activates (0 to disable).
+        failure_voltage_offset: Voltage offset to add when failure is active.
     """
 
     can_enabled: bool = True
@@ -49,6 +51,8 @@ class SimulatorConfig:
     gpio_enabled: bool = True
     gpio_i2c_bus: int = 1
     gpio_address: int = 0x20
+    failure_delay_seconds: float = 0.0
+    failure_voltage_offset: float = 1.0
 
 
 @dataclass
@@ -68,6 +72,17 @@ class CanHeartbeatState:
     message_count: int = 0
     arbitration_id: int = 0x100
     interval_ms: int = 100
+
+
+@dataclass
+class FailureState:
+    """State for failure injection."""
+
+    enabled: bool = False
+    delay_seconds: float = 0.0
+    voltage_offset: float = 1.0
+    start_time: float | None = None
+    active: bool = False
 
 
 class UutSimulator:
@@ -121,6 +136,13 @@ class UutSimulator:
 
         # ADC (from hwtest-waveshare)
         self._adc = adc
+
+        # Failure injection state
+        self._failure = FailureState(
+            enabled=self._config.failure_delay_seconds > 0,
+            delay_seconds=self._config.failure_delay_seconds,
+            voltage_offset=self._config.failure_voltage_offset,
+        )
 
     @property
     def config(self) -> SimulatorConfig:
@@ -416,6 +438,8 @@ class UutSimulator:
     def dac_write(self, channel: int, voltage: float) -> None:
         """Write a voltage to the DAC.
 
+        If failure injection is enabled and active, an offset is added to the voltage.
+
         Args:
             channel: DAC channel (0 or 1).
             voltage: Voltage to output (0 to vref).
@@ -429,8 +453,32 @@ class UutSimulator:
         if not 0 <= voltage <= self._config.dac_vref:
             raise ValueError(f"voltage must be 0-{self._config.dac_vref}V, got {voltage}")
 
+        # Track first DAC write for failure injection timing
+        if self._failure.enabled and self._failure.start_time is None:
+            self._failure.start_time = time.time()
+            logger.info(
+                "Failure injection timer started (delay: %.1fs, offset: %.2fV)",
+                self._failure.delay_seconds,
+                self._failure.voltage_offset,
+            )
+
+        # Check if failure should activate
+        output_voltage = voltage
+        if self._failure.enabled and self._failure.start_time is not None:
+            elapsed = time.time() - self._failure.start_time
+            if elapsed >= self._failure.delay_seconds:
+                if not self._failure.active:
+                    self._failure.active = True
+                    logger.warning(
+                        "Failure injection ACTIVATED after %.1fs (offset: +%.2fV)",
+                        elapsed,
+                        self._failure.voltage_offset,
+                    )
+                # Apply voltage offset, clamped to DAC range
+                output_voltage = min(voltage + self._failure.voltage_offset, self._config.dac_vref)
+
         if self._dac is not None:
-            self._dac.write_voltage(channel, voltage)
+            self._dac.write_voltage(channel, output_voltage)
 
         self._dac_values[channel] = voltage
 
@@ -623,3 +671,69 @@ class UutSimulator:
         if self._gpio is None:
             raise RuntimeError("GPIO not available")
         self._gpio.set_pullup(pin, enabled)
+
+    # -------------------------------------------------------------------------
+    # Failure Injection
+    # -------------------------------------------------------------------------
+
+    def failure_get_state(self) -> FailureState:
+        """Get the current failure injection state.
+
+        Returns:
+            Current failure state including enabled, delay, offset, and active status.
+        """
+        return self._failure
+
+    def failure_configure(
+        self,
+        delay_seconds: float | None = None,
+        voltage_offset: float | None = None,
+    ) -> None:
+        """Configure failure injection parameters.
+
+        Args:
+            delay_seconds: New delay in seconds (0 to disable). If None, unchanged.
+            voltage_offset: New voltage offset in volts. If None, unchanged.
+        """
+        if delay_seconds is not None:
+            self._failure.delay_seconds = delay_seconds
+            self._failure.enabled = delay_seconds > 0
+            # Reset state if disabling or changing delay
+            self._failure.start_time = None
+            self._failure.active = False
+            logger.info(
+                "Failure injection %s (delay: %.1fs)",
+                "enabled" if self._failure.enabled else "disabled",
+                delay_seconds,
+            )
+
+        if voltage_offset is not None:
+            self._failure.voltage_offset = voltage_offset
+            logger.info("Failure voltage offset set to %.2fV", voltage_offset)
+
+    def failure_reset(self) -> None:
+        """Reset failure injection state without changing configuration.
+
+        This clears the start time and active flag, allowing the failure
+        sequence to begin again on the next DAC write.
+        """
+        self._failure.start_time = None
+        self._failure.active = False
+        logger.info("Failure injection state reset")
+
+    def failure_time_until_active(self) -> float | None:
+        """Get the time in seconds until failure injection activates.
+
+        Returns:
+            Seconds until failure activates, 0 if already active,
+            or None if failure injection is disabled or not yet started.
+        """
+        if not self._failure.enabled:
+            return None
+        if self._failure.start_time is None:
+            return None
+        if self._failure.active:
+            return 0.0
+        elapsed = time.time() - self._failure.start_time
+        remaining = self._failure.delay_seconds - elapsed
+        return max(0.0, remaining)
