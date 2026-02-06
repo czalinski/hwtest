@@ -2,6 +2,26 @@
 
 Provides an in-process SCPI emulator implementing the ``ScpiTransport`` protocol.
 Supports both single-channel (9115) and multi-channel (9130B) BK Precision PSU models.
+
+The emulator normalizes SCPI commands to canonical short form, allowing it to
+accept any valid SCPI syntax (long/short forms, optional segments). This enables
+testing with the same commands used against real instruments.
+
+Example:
+    Create and use an emulator directly::
+
+        emulator = make_9115_emulator()
+        emulator.write("VOLT 12.0")
+        emulator.write("VOLT?")
+        voltage = emulator.read()  # Returns "12.0000"
+
+    Use with ScpiConnection::
+
+        from hwtest_scpi import ScpiConnection
+        emulator = make_9115_emulator()
+        conn = ScpiConnection(emulator)
+        conn.command("VOLT 12.0")
+        voltage = conn.query_number("VOLT?")
 """
 
 from __future__ import annotations
@@ -39,12 +59,22 @@ _OPTIONAL_SEGMENTS: set[str] = {"SOUR", "LEV", "IMM", "AMPL", "SCAL", "DC", "STA
 def _normalize_header(header: str) -> str:
     """Normalize a SCPI header to canonical short form.
 
-    1. Uppercase
-    2. Strip leading colon
-    3. Split on ``:``
-    4. Map long forms to short forms
-    5. Drop optional segments
-    6. Rejoin with ``:``
+    Converts any valid SCPI header to a consistent short-form key for
+    dispatch table lookup.
+
+    Processing steps:
+        1. Uppercase the header
+        2. Strip leading colon if present
+        3. Split on ``:`` delimiter
+        4. Map long forms to short forms (e.g., VOLTAGE -> VOLT)
+        5. Drop optional segments (SOUR, LEV, IMM, etc.)
+        6. Rejoin with ``:``
+
+    Args:
+        header: Raw SCPI header string (e.g., ":SOURCE:VOLTAGE").
+
+    Returns:
+        Normalized short-form header (e.g., "VOLT").
     """
     upper = header.upper()
     if upper.startswith(":"):
@@ -94,6 +124,22 @@ class BkDcPsuEmulatorConfig:
 
 @dataclass
 class _ChannelState:
+    """Internal state for a single PSU channel.
+
+    Tracks voltage/current setpoints, output enable state, protection
+    settings, and optional measurement overrides for testing.
+
+    Attributes:
+        voltage_setpoint: Programmed voltage in volts.
+        current_limit: Programmed current limit in amps.
+        output_enabled: Whether the output is enabled.
+        ovp_level: Over-voltage protection threshold in volts.
+        measured_voltage: Override for ``MEAS:VOLT?`` response. If None,
+            returns setpoint when output enabled, 0 otherwise.
+        measured_current: Override for ``MEAS:CURR?`` response. If None,
+            returns 0.
+    """
+
     voltage_setpoint: float = 0.0
     current_limit: float = 0.0
     output_enabled: bool = False
@@ -109,6 +155,25 @@ class _ChannelState:
 
 class BkDcPsuEmulator:
     """In-process BK Precision DC PSU emulator implementing ``ScpiTransport``.
+
+    Emulates the SCPI command set for BK Precision 9100 series DC power
+    supplies. Can be used directly as a transport or wrapped in a
+    ``ScpiConnection`` for higher-level access.
+
+    Supports:
+        - IEEE 488.2 common commands (*IDN?, *RST, *CLS, *OPC?)
+        - Voltage/current setpoint and measurement queries
+        - Output enable/disable
+        - Over-voltage protection settings
+        - Multi-channel selection and APPLY command
+        - SCPI error queue (SYST:ERR?)
+
+    Attributes:
+        _config: Emulator configuration.
+        _channels: List of channel state objects.
+        _selected_channel: Currently selected channel (1-based).
+        _response_buffer: Buffered response for the next read().
+        _error_queue: Queue of (code, message) error tuples.
 
     Args:
         config: Emulator configuration specifying model characteristics.
@@ -148,7 +213,16 @@ class BkDcPsuEmulator:
     # -- Transport interface ------------------------------------------------
 
     def write(self, message: str) -> None:
-        """Process a SCPI command or query string."""
+        """Process a SCPI command or query string.
+
+        Parses the message, dispatches to the appropriate handler, and
+        buffers any response for subsequent read(). For queries, the
+        response is available via read(). For commands, read() returns
+        an empty string.
+
+        Args:
+            message: SCPI command or query string.
+        """
         line = message.strip()
         if not line:
             return
@@ -161,7 +235,16 @@ class BkDcPsuEmulator:
         self._dispatch(header, args, is_query)
 
     def _parse_line(self, line: str) -> tuple[bool, str, str]:
-        """Parse a SCPI line into (is_query, header, args)."""
+        """Parse a SCPI line into (is_query, header, args).
+
+        Args:
+            line: Stripped SCPI command or query string.
+
+        Returns:
+            Tuple of (is_query, header, args) where is_query indicates
+            if the command contains a '?', header is the command keyword,
+            and args is the remainder after the header.
+        """
         is_query = "?" in line
         if is_query:
             qmark_idx = line.index("?")
@@ -174,7 +257,18 @@ class BkDcPsuEmulator:
         return is_query, header, args
 
     def _handle_common_command(self, header: str, is_query: bool) -> bool:
-        """Handle IEEE 488.2 and SYST:ERR? commands. Returns True if handled."""
+        """Handle IEEE 488.2 and SYST:ERR? commands.
+
+        Processes common commands (*IDN?, *RST, *CLS, *OPC?) and the
+        SCPI error query (SYST:ERR?).
+
+        Args:
+            header: Command header including '?' for queries.
+            is_query: True if the command is a query.
+
+        Returns:
+            True if the command was handled, False otherwise.
+        """
         upper_header = header.upper()
         ieee_handlers: dict[str, str | None] = {
             "*IDN?": self._config.identity,
@@ -198,7 +292,17 @@ class BkDcPsuEmulator:
         return False
 
     def _dispatch(self, header: str, args: str, is_query: bool) -> None:
-        """Dispatch a normalized command or query to handler tables."""
+        """Dispatch a normalized command or query to handler tables.
+
+        Normalizes the header and looks up the appropriate handler in
+        either the query or set handler tables. Appends an error to the
+        queue if no handler is found.
+
+        Args:
+            header: Raw command header.
+            args: Command arguments string.
+            is_query: True if the command is a query.
+        """
         if is_query:
             norm_key = _normalize_header(header.rstrip("?")) + "?"
             handler = self._query_handlers.get(norm_key)
@@ -215,13 +319,22 @@ class BkDcPsuEmulator:
                 self._error_queue.append((-100, "Command error"))
 
     def read(self) -> str:
-        """Return and clear the buffered response."""
+        """Return and clear the buffered response.
+
+        Returns:
+            The response from the last query, or empty string if no
+            query was pending.
+        """
         resp = self._response_buffer
         self._response_buffer = ""
         return resp
 
     def close(self) -> None:
-        """Close the emulator (no-op for in-process transport)."""
+        """Close the emulator.
+
+        No-op for in-process transport; provided for ``ScpiTransport``
+        protocol compatibility.
+        """
 
     # -- Test helpers -------------------------------------------------------
 
@@ -246,17 +359,36 @@ class BkDcPsuEmulator:
     # -- Private helpers ----------------------------------------------------
 
     def _get_channel_state(self, channel: int) -> _ChannelState:
+        """Get the state object for a specific channel.
+
+        Args:
+            channel: Channel number (1-based).
+
+        Returns:
+            The channel's state object.
+
+        Raises:
+            ValueError: If channel is out of range.
+        """
         if channel < 1 or channel > self._config.num_channels:
             raise ValueError(f"Channel {channel} out of range (1-{self._config.num_channels})")
         return self._channels[channel - 1]
 
     @property
     def _ch(self) -> _ChannelState:
-        """Currently selected channel state."""
+        """Currently selected channel state.
+
+        Returns:
+            The state object for the currently selected channel.
+        """
         return self._channels[self._selected_channel - 1]
 
     def _reset(self) -> None:
-        """Reset all channels to defaults."""
+        """Reset all channels to factory defaults.
+
+        Clears all setpoints, disables outputs, resets OVP levels to
+        max_voltage, clears measurement overrides, and selects channel 1.
+        """
         for ch in self._channels:
             ch.voltage_setpoint = 0.0
             ch.current_limit = 0.0
@@ -267,6 +399,12 @@ class BkDcPsuEmulator:
         self._selected_channel = 1
 
     def _pop_error(self) -> str:
+        """Pop and format the next error from the queue.
+
+        Returns:
+            SCPI error string in format ``code,"message"`` or
+            ``0,"No error"`` if queue is empty.
+        """
         if self._error_queue:
             code, msg = self._error_queue.pop(0)
             return f'{code},"{msg}"'
@@ -275,6 +413,7 @@ class BkDcPsuEmulator:
     # -- Set handlers -------------------------------------------------------
 
     def _set_voltage(self, args: str) -> None:
+        """Handle VOLT command to set voltage setpoint."""
         try:
             value = float(args.strip())
         except ValueError:
@@ -283,6 +422,7 @@ class BkDcPsuEmulator:
         self._ch.voltage_setpoint = value
 
     def _set_current(self, args: str) -> None:
+        """Handle CURR command to set current limit."""
         try:
             value = float(args.strip())
         except ValueError:
@@ -291,6 +431,7 @@ class BkDcPsuEmulator:
         self._ch.current_limit = value
 
     def _set_ovp(self, args: str) -> None:
+        """Handle VOLT:PROT command to set over-voltage protection level."""
         try:
             value = float(args.strip())
         except ValueError:
@@ -299,6 +440,7 @@ class BkDcPsuEmulator:
         self._ch.ovp_level = value
 
     def _set_output(self, args: str) -> None:
+        """Handle OUTP command to enable/disable output."""
         token = args.strip().upper()
         if token in ("ON", "1"):
             self._ch.output_enabled = True
@@ -308,6 +450,7 @@ class BkDcPsuEmulator:
             self._error_queue.append((-220, "Parameter error"))
 
     def _set_channel(self, args: str) -> None:
+        """Handle INST:NSEL command to select active channel."""
         try:
             ch_num = int(args.strip())
         except ValueError:
@@ -319,7 +462,10 @@ class BkDcPsuEmulator:
         self._selected_channel = ch_num
 
     def _set_apply(self, args: str) -> None:
-        """Parse ``APPL CH{n},<v>,<i>``."""
+        """Handle APPL command to set voltage and current for a channel.
+
+        Parses ``APPL CH{n},<voltage>,<current>`` format.
+        """
         parts = [p.strip() for p in args.split(",")]
         if len(parts) != 3:
             self._error_queue.append((-220, "Parameter error"))
@@ -345,21 +491,27 @@ class BkDcPsuEmulator:
     # -- Query handlers -----------------------------------------------------
 
     def _get_voltage(self) -> str:
+        """Handle VOLT? query to get voltage setpoint."""
         return f"{self._ch.voltage_setpoint:.4f}"
 
     def _get_current(self) -> str:
+        """Handle CURR? query to get current limit."""
         return f"{self._ch.current_limit:.4f}"
 
     def _get_ovp(self) -> str:
+        """Handle VOLT:PROT? query to get OVP level."""
         return f"{self._ch.ovp_level:.4f}"
 
     def _get_output(self) -> str:
+        """Handle OUTP? query to get output state."""
         return "1" if self._ch.output_enabled else "0"
 
     def _get_channel(self) -> str:
+        """Handle INST:NSEL? query to get selected channel."""
         return str(self._selected_channel)
 
     def _measure_voltage(self) -> str:
+        """Handle MEAS:VOLT? query to measure output voltage."""
         ch = self._ch
         if ch.measured_voltage is not None:
             return f"{ch.measured_voltage:.4f}"
@@ -368,12 +520,14 @@ class BkDcPsuEmulator:
         return "0.0000"
 
     def _measure_current(self) -> str:
+        """Handle MEAS:CURR? query to measure output current."""
         ch = self._ch
         if ch.measured_current is not None:
             return f"{ch.measured_current:.4f}"
         return "0.0000"
 
     def _measure_power(self) -> str:
+        """Handle MEAS:POW? query to measure output power."""
         # Use same logic as individual measurements
         ch = self._ch
         if ch.measured_voltage is not None:
@@ -389,6 +543,7 @@ class BkDcPsuEmulator:
         return f"{v * i:.4f}"
 
     def _get_apply(self) -> str:
+        """Handle APPL? query to get voltage and current setpoints."""
         return f"{self._ch.voltage_setpoint:.4f},{self._ch.current_limit:.4f}"
 
 

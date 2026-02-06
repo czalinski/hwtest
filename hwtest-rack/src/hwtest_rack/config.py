@@ -1,4 +1,26 @@
-"""YAML configuration loading for test racks."""
+"""YAML configuration loading for test racks.
+
+This module provides configuration loading and parsing for test rack YAML files.
+It handles parsing of rack metadata, instrument configurations, channel mappings,
+and identity verification settings.
+
+Example YAML configuration:
+    rack:
+      id: "orange-pi-5-integration"
+      description: "Integration test rack"
+
+    instruments:
+      dc_psu_slot_3:
+        driver: "hwtest_bkprecision.psu:create_instrument"
+        identity:
+          manufacturer: "B&K Precision"
+          model: "9115"
+        kwargs:
+          visa_address: "TCPIP::192.168.1.100::5025::SOCKET"
+          channels:
+            - id: 1
+              logical_name: "main_battery"
+"""
 
 from __future__ import annotations
 
@@ -15,9 +37,13 @@ from hwtest_rack.channel import ChannelRegistry, ChannelType, LogicalChannel
 class ExpectedIdentity:
     """Expected instrument identity for verification.
 
-    Args:
-        manufacturer: Expected manufacturer name.
-        model: Expected model name/number.
+    Used during rack initialization to verify that the correct instrument
+    is connected. The rack compares this against the actual identity
+    returned by the instrument's get_identity() method.
+
+    Attributes:
+        manufacturer: Expected manufacturer name (e.g., "B&K Precision").
+        model: Expected model name/number (e.g., "9115").
     """
 
     manufacturer: str
@@ -28,11 +54,14 @@ class ExpectedIdentity:
 class ChannelConfig:
     """Configuration for a logical channel on an instrument.
 
-    Args:
-        id: Physical channel ID on the instrument.
-        logical_name: Logical name for this channel.
-        channel_type: Type of channel (psu, load, daq_analog, daq_digital).
-        metadata: Additional channel-specific configuration.
+    Maps a physical channel ID to a logical name and type, allowing
+    test code to use meaningful names instead of numeric IDs.
+
+    Attributes:
+        id: Physical channel ID on the instrument (often 1-based for PSUs).
+        logical_name: Logical name for this channel (e.g., "main_battery").
+        channel_type: Type of channel (PSU, LOAD, DAQ_ANALOG, DAQ_DIGITAL).
+        metadata: Additional channel-specific configuration (e.g., max voltage).
     """
 
     id: int
@@ -45,10 +74,15 @@ class ChannelConfig:
 class InstrumentConfig:
     """Configuration for a single instrument in the rack.
 
-    Args:
-        name: Unique instrument name within the rack.
-        driver: Driver path in "module:function" format.
-        identity: Expected identity for verification.
+    Contains all information needed to load, initialize, and verify
+    an instrument, including its driver path, expected identity, and
+    channel configurations.
+
+    Attributes:
+        name: Unique instrument name within the rack (e.g., "dc_psu_slot_3").
+        driver: Driver path in "module:function" format
+            (e.g., "hwtest_bkprecision.psu:create_instrument").
+        identity: Expected identity for verification at initialization.
         kwargs: Additional keyword arguments passed to the driver factory.
         channels: Logical channel configurations (extracted from kwargs).
     """
@@ -64,11 +98,16 @@ class InstrumentConfig:
 class RackConfig:
     """Configuration for a test rack.
 
-    Args:
-        rack_id: Unique identifier for this rack.
-        description: Human-readable description.
-        instruments: Instrument configurations.
-        channel_registry: Registry of logical channel names.
+    The top-level configuration object representing an entire test rack,
+    including all instruments and the channel registry built from their
+    channel configurations.
+
+    Attributes:
+        rack_id: Unique identifier for this rack (e.g., "orange-pi-5-integration").
+        description: Human-readable description of the rack.
+        instruments: Tuple of instrument configurations.
+        channel_registry: Registry of logical channel names populated from
+            instrument channel configurations.
     """
 
     rack_id: str

@@ -1,4 +1,15 @@
-"""PyVISA transport for SCPI instruments."""
+"""PyVISA transport for SCPI instruments.
+
+This module provides a VISA-based transport implementation for communicating
+with SCPI instruments. It wraps the PyVISA library, which is lazily imported
+to allow the rest of hwtest-scpi to work without VISA installed.
+
+Supported resource string formats include:
+- TCPIP: ``TCPIP::192.168.1.100::INSTR`` (LAN instruments)
+- USB: ``USB0::0x0957::0x0407::MY12345678::0::INSTR``
+- GPIB: ``GPIB0::22::INSTR``
+- Serial: ``ASRL1::INSTR``
+"""
 
 from __future__ import annotations
 
@@ -15,11 +26,25 @@ class VisaResource:
     ``pyvisa`` library is imported lazily on :meth:`open` so the rest of
     ``hwtest-scpi`` works without it installed.
 
+    This class implements the :class:`ScpiTransport` protocol and can be
+    passed to :class:`ScpiConnection` for high-level SCPI operations.
+
+    Attributes:
+        resource_string: The VISA resource address string.
+        is_open: Whether the resource is currently open.
+
     Args:
         resource_string: VISA resource address.
         timeout_ms: I/O timeout in milliseconds (applied on open).
         read_termination: Character(s) that terminate read operations.
         write_termination: Character(s) appended to write operations.
+
+    Example:
+        >>> resource = VisaResource("TCPIP::192.168.1.100::INSTR")
+        >>> resource.open()
+        >>> resource.write("*IDN?")
+        >>> print(resource.read())
+        >>> resource.close()
     """
 
     def __init__(
@@ -30,6 +55,16 @@ class VisaResource:
         read_termination: str = "\n",
         write_termination: str = "\n",
     ) -> None:
+        """Initialize the VISA resource.
+
+        Args:
+            resource_string: VISA resource address string.
+            timeout_ms: I/O timeout in milliseconds. Defaults to 5000.
+            read_termination: Character(s) that terminate read operations.
+                Defaults to newline.
+            write_termination: Character(s) appended to write operations.
+                Defaults to newline.
+        """
         self._resource_string = resource_string
         self._timeout_ms = timeout_ms
         self._read_termination = read_termination

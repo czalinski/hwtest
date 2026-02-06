@@ -1,4 +1,36 @@
-"""MCC 152 digital I/O and analog output HAT instrument driver."""
+"""MCC 152 digital I/O and analog output HAT instrument driver.
+
+This module provides an instrument driver for the Measurement Computing MCC 152
+DAQ HAT, which offers 8 digital I/O channels (individually configurable as
+input or output) and 2 analog output channels (0-5V range).
+
+The driver provides:
+    - Synchronous read/write operations for digital I/O pins
+    - Analog voltage output with 0-5V range
+    - Logical channel naming for hardware abstraction
+    - Factory function for test rack integration
+
+Example:
+    Basic usage::
+
+        from hwtest_mcc import create_mcc152, DioDirection
+
+        instrument = create_mcc152(
+            address=0,
+            source_id="dio_controller",
+            dio_channels=[
+                {"id": 0, "name": "relay", "direction": "OUTPUT"},
+                {"id": 1, "name": "sensor", "direction": "INPUT"},
+            ],
+            analog_channels=[
+                {"id": 0, "name": "control_voltage", "initial_voltage": 2.5},
+            ],
+        )
+        instrument.open()
+        instrument.dio_write("relay", True)
+        sensor_state = instrument.dio_read("sensor")
+        instrument.analog_write("control_voltage", 3.3)
+"""
 
 # pylint: disable=broad-exception-caught  # HAT calls may raise unpredictable exceptions
 
@@ -13,7 +45,12 @@ from hwtest_core.types.common import InstrumentIdentity
 
 
 class DioDirection(Enum):
-    """Digital I/O pin direction."""
+    """Digital I/O pin direction.
+
+    Attributes:
+        INPUT: Configure pin as digital input.
+        OUTPUT: Configure pin as digital output.
+    """
 
     INPUT = 0
     OUTPUT = 1
@@ -23,7 +60,7 @@ class DioDirection(Enum):
 class Mcc152DioChannel:
     """A single MCC 152 digital I/O channel configuration.
 
-    Args:
+    Attributes:
         id: Physical channel number (0-7).
         name: Logical alias for this channel.
         direction: Whether this pin is an input or output.
@@ -40,7 +77,7 @@ class Mcc152DioChannel:
 class Mcc152AnalogChannel:
     """A single MCC 152 analog output channel configuration.
 
-    Args:
+    Attributes:
         id: Physical channel number (0-1).
         name: Logical alias for this channel.
         initial_voltage: Initial output voltage (0-5V).
@@ -55,11 +92,16 @@ class Mcc152AnalogChannel:
 class Mcc152Config:
     """Configuration for an MCC 152 instrument.
 
-    Args:
+    Attributes:
         address: HAT address on the stack (0-7).
         dio_channels: Digital I/O channel configurations.
         analog_channels: Analog output channel configurations.
         source_id: Instrument source identifier.
+
+    Raises:
+        ValueError: If address is out of range, channel IDs are invalid or
+            duplicated, channel names are duplicated, or initial voltages
+            are out of range.
     """
 
     address: int
@@ -68,7 +110,11 @@ class Mcc152Config:
     source_id: str
 
     def __post_init__(self) -> None:
-        """Validate configuration parameters."""
+        """Validate configuration parameters.
+
+        Raises:
+            ValueError: If any configuration parameter is invalid.
+        """
         if not 0 <= self.address <= 7:
             raise ValueError(f"address must be 0-7, got {self.address}")
 
@@ -95,9 +141,7 @@ class Mcc152Config:
             if ch.name in seen_names:
                 raise ValueError(f"duplicate channel name: {ch.name}")
             if not 0.0 <= ch.initial_voltage <= 5.0:
-                raise ValueError(
-                    f"initial_voltage must be 0-5V, got {ch.initial_voltage}"
-                )
+                raise ValueError(f"initial_voltage must be 0-5V, got {ch.initial_voltage}")
             seen_analog_ids.add(ch.id)
             seen_names.add(ch.name)
 
@@ -106,26 +150,52 @@ class Mcc152Instrument:
     """Instrument driver for the MCC 152 digital I/O and analog output HAT.
 
     Provides synchronous control of 8 digital I/O channels (configurable as
-    input or output) and 2 analog output channels (0-5V).
+    input or output) and 2 analog output channels (0-5V). Unlike the MCC 118
+    and MCC 134, this instrument does not support streaming and operates in
+    a synchronous request/response mode.
 
-    Args:
-        config: Instrument configuration.
+    Attributes:
+        is_open: True if the HAT connection is currently open.
+
+    Example:
+        ::
+
+            config = Mcc152Config(
+                address=0,
+                dio_channels=(Mcc152DioChannel(0, "led", DioDirection.OUTPUT),),
+                analog_channels=(Mcc152AnalogChannel(0, "dac"),),
+                source_id="control",
+            )
+            instrument = Mcc152Instrument(config)
+            instrument.open()
+            try:
+                instrument.dio_write("led", True)
+            finally:
+                instrument.close()
     """
 
     def __init__(self, config: Mcc152Config) -> None:
+        """Initialize the MCC 152 instrument driver.
+
+        Args:
+            config: Instrument configuration specifying address, channels,
+                and initial values.
+        """
         self._config = config
         self._hat: Any = None
         self._is_open = False
-        self._dio_by_name: dict[str, Mcc152DioChannel] = {
-            ch.name: ch for ch in config.dio_channels
-        }
+        self._dio_by_name: dict[str, Mcc152DioChannel] = {ch.name: ch for ch in config.dio_channels}
         self._analog_by_name: dict[str, Mcc152AnalogChannel] = {
             ch.name: ch for ch in config.analog_channels
         }
 
     @property
     def is_open(self) -> bool:
-        """Return True if the HAT connection is open."""
+        """Check if the HAT connection is currently open.
+
+        Returns:
+            True if the HAT connection is open and ready for operations.
+        """
         return self._is_open
 
     def get_identity(self) -> InstrumentIdentity:
@@ -182,16 +252,12 @@ class Mcc152Instrument:
         for ch in self._config.dio_channels:
             try:
                 # Set direction for this single bit (0=output, 1=input)
-                hat.dio_config_write_bit(
-                    ch.id, daqhats.DIOConfigItem.DIRECTION, ch.direction.value
-                )
+                hat.dio_config_write_bit(ch.id, daqhats.DIOConfigItem.DIRECTION, ch.direction.value)
                 if ch.direction == DioDirection.OUTPUT:
                     hat.dio_output_write_bit(ch.id, int(ch.initial_value))
             except Exception as exc:
                 self.close()
-                raise HwtestError(
-                    f"Failed to configure DIO channel {ch.id}: {exc}"
-                ) from exc
+                raise HwtestError(f"Failed to configure DIO channel {ch.id}: {exc}") from exc
 
         # Set initial analog output values
         for ch in self._config.analog_channels:
@@ -199,17 +265,24 @@ class Mcc152Instrument:
                 hat.a_out_write(ch.id, ch.initial_voltage)
             except Exception as exc:
                 self.close()
-                raise HwtestError(
-                    f"Failed to configure analog channel {ch.id}: {exc}"
-                ) from exc
+                raise HwtestError(f"Failed to configure analog channel {ch.id}: {exc}") from exc
 
     def close(self) -> None:
-        """Close the HAT connection."""
+        """Close the HAT connection.
+
+        Releases the HAT handle. After calling this method, :attr:`is_open`
+        will return False and operations will raise :class:`HwtestError`.
+        Safe to call multiple times.
+        """
         self._hat = None
         self._is_open = False
 
     def _require_open(self) -> None:
-        """Raise if the HAT is not open."""
+        """Verify the HAT connection is open.
+
+        Raises:
+            HwtestError: If the HAT has not been opened.
+        """
         if not self._is_open:
             raise HwtestError("HAT not opened; call open() first")
 
@@ -283,7 +356,17 @@ class Mcc152Instrument:
             raise HwtestError(f"Failed to write DIO port: {exc}") from exc
 
     def _resolve_dio_channel(self, channel: str | int) -> int:
-        """Resolve a channel name or ID to a physical channel number."""
+        """Resolve a channel name or ID to a physical channel number.
+
+        Args:
+            channel: Channel name (string) or physical channel number (int).
+
+        Returns:
+            Physical channel number (0-7).
+
+        Raises:
+            HwtestError: If channel number is out of range or name is unknown.
+        """
         if isinstance(channel, int):
             if not 0 <= channel <= 7:
                 raise HwtestError(f"DIO channel must be 0-7, got {channel}")
@@ -312,9 +395,7 @@ class Mcc152Instrument:
         try:
             self._hat.a_out_write(ch_id, voltage)
         except Exception as exc:
-            raise HwtestError(
-                f"Failed to write analog channel {ch_id}: {exc}"
-            ) from exc
+            raise HwtestError(f"Failed to write analog channel {ch_id}: {exc}") from exc
 
     def analog_write_all(self, voltages: tuple[float, float]) -> None:
         """Write voltages to both analog output channels.
@@ -335,7 +416,17 @@ class Mcc152Instrument:
             raise HwtestError(f"Failed to write analog outputs: {exc}") from exc
 
     def _resolve_analog_channel(self, channel: str | int) -> int:
-        """Resolve a channel name or ID to a physical channel number."""
+        """Resolve a channel name or ID to a physical channel number.
+
+        Args:
+            channel: Channel name (string) or physical channel number (int).
+
+        Returns:
+            Physical channel number (0-1).
+
+        Raises:
+            HwtestError: If channel number is out of range or name is unknown.
+        """
         if isinstance(channel, int):
             if not 0 <= channel <= 1:
                 raise HwtestError(f"Analog channel must be 0-1, got {channel}")

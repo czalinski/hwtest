@@ -1,4 +1,35 @@
-"""MCC 118 voltage DAQ HAT instrument driver."""
+"""MCC 118 voltage DAQ HAT instrument driver.
+
+This module provides an instrument driver for the Measurement Computing MCC 118
+DAQ HAT, which offers 8 single-ended analog input channels with a combined
+sample rate of up to 100 kS/s and a +-10V input range.
+
+The driver provides:
+    - Continuous hardware-based scanning with double buffering
+    - Asynchronous streaming via StreamData publishing
+    - Configurable sample rates up to 100 kS/s aggregate
+    - Logical channel naming for hardware abstraction
+    - Factory function for test rack integration
+
+Example:
+    Basic usage with async streaming::
+
+        from hwtest_mcc import create_mcc118
+
+        instrument = create_mcc118(
+            address=0,
+            sample_rate=10000.0,
+            channels=[
+                {"id": 0, "name": "voltage_a"},
+                {"id": 1, "name": "voltage_b"},
+            ],
+            source_id="voltage_daq",
+            publisher=my_publisher,
+        )
+        await instrument.start()
+        # ... samples are published continuously ...
+        await instrument.stop()
+"""
 
 # pylint: disable=broad-exception-caught  # HAT calls may raise unpredictable exceptions
 
@@ -22,7 +53,7 @@ logger = logging.getLogger(__name__)
 class Mcc118Channel:
     """A single MCC 118 analog input channel mapping.
 
-    Args:
+    Attributes:
         id: Physical channel number (0-7).
         name: Logical alias used as the stream field name.
     """
@@ -35,11 +66,21 @@ class Mcc118Channel:
 class Mcc118Config:
     """Configuration for an MCC 118 instrument.
 
-    Args:
+    Attributes:
         address: HAT address on the stack (0-7).
         sample_rate: Requested sample rate per channel in Hz.
         channels: Enabled channels with their aliases.
         source_id: Stream source identifier.
+
+    Note:
+        The MCC 118 has a maximum aggregate sample rate of 100 kS/s shared
+        across all enabled channels. For example, with 4 channels enabled,
+        each channel can sample at up to 25 kS/s.
+
+    Raises:
+        ValueError: If address is out of range, sample_rate is not positive,
+            channels is empty, channel IDs are invalid or duplicated, or
+            channel names are duplicated.
     """
 
     address: int
@@ -48,7 +89,11 @@ class Mcc118Config:
     source_id: str
 
     def __post_init__(self) -> None:
-        """Validate configuration parameters."""
+        """Validate configuration parameters.
+
+        Raises:
+            ValueError: If any configuration parameter is invalid.
+        """
         if not 0 <= self.address <= 7:
             raise ValueError(f"address must be 0-7, got {self.address}")
         if self.sample_rate <= 0:
@@ -71,18 +116,41 @@ class Mcc118Config:
 class Mcc118Instrument:
     """Instrument driver for the MCC 118 voltage DAQ HAT.
 
-    Performs continuous analog input scanning and publishes samples
-    as StreamData batches via a StreamPublisher.
+    Performs continuous analog input scanning using the hardware's internal
+    scan engine and publishes samples as StreamData batches via a
+    StreamPublisher. The scan runs asynchronously in the background,
+    reading samples in batches of approximately 1/10th second.
 
-    Args:
-        config: Instrument configuration.
-        publisher: Stream publisher for sending data batches. Optional if only
-            using the instrument for identity/status checks without streaming.
+    Attributes:
+        schema: The StreamSchema describing the published data format.
+        actual_sample_rate: The actual sample rate achieved by the hardware.
+        is_running: True if the instrument is actively scanning.
+
+    Example:
+        ::
+
+            config = Mcc118Config(
+                address=0,
+                sample_rate=1000.0,
+                channels=(Mcc118Channel(0, "voltage"),),
+                source_id="daq",
+            )
+            instrument = Mcc118Instrument(config, publisher)
+            await instrument.start()
+            print(f"Actual rate: {instrument.actual_sample_rate} Hz")
+            # ... samples are published continuously ...
+            await instrument.stop()
     """
 
-    def __init__(
-        self, config: Mcc118Config, publisher: StreamPublisher | None = None
-    ) -> None:
+    def __init__(self, config: Mcc118Config, publisher: StreamPublisher | None = None) -> None:
+        """Initialize the MCC 118 instrument driver.
+
+        Args:
+            config: Instrument configuration specifying address, sample rate,
+                and channels.
+            publisher: Stream publisher for sending data batches. Optional if
+                only using the instrument for identity/status checks.
+        """
         self._config = config
         self._publisher = publisher
         self._schema = StreamSchema(
@@ -96,17 +164,34 @@ class Mcc118Instrument:
 
     @property
     def schema(self) -> StreamSchema:
-        """The stream schema for this instrument."""
+        """Get the stream schema for this instrument.
+
+        Returns:
+            StreamSchema with fields for each configured channel,
+            using DataType.F64 and "V" (volts) units.
+        """
         return self._schema
 
     @property
     def actual_sample_rate(self) -> float:
-        """The actual sample rate as reported by the hardware after scan start."""
+        """Get the actual sample rate achieved by the hardware.
+
+        The hardware may adjust the requested sample rate to a value it can
+        achieve. This property returns the actual rate after :meth:`start`
+        has been called.
+
+        Returns:
+            Actual sample rate in Hz, or 0.0 if not yet started.
+        """
         return self._actual_sample_rate
 
     @property
     def is_running(self) -> bool:
-        """Return True if the instrument is actively scanning."""
+        """Check if the instrument is actively scanning.
+
+        Returns:
+            True if the scan loop is running and publishing data.
+        """
         return self._running
 
     def get_identity(self) -> InstrumentIdentity:
@@ -162,7 +247,11 @@ class Mcc118Instrument:
         self._hat = hat
 
     def close(self) -> None:
-        """Close the HAT connection."""
+        """Close the HAT connection.
+
+        Stops any active scan and releases the HAT handle. Safe to call
+        multiple times or when not scanning.
+        """
         if self._hat is not None:
             try:
                 self._hat.a_in_scan_stop()
@@ -172,7 +261,11 @@ class Mcc118Instrument:
             self._hat = None
 
     def _channel_mask(self) -> int:
-        """Compute the channel bitmask for a_in_scan_start."""
+        """Compute the channel bitmask for a_in_scan_start.
+
+        Returns:
+            Bitmask where bit N is set if channel N is enabled.
+        """
         mask = 0
         for ch in self._config.channels:
             mask |= 1 << ch.id
@@ -220,7 +313,11 @@ class Mcc118Instrument:
         self._task = asyncio.create_task(self._scan_loop())
 
     async def stop(self) -> None:
-        """Stop scanning and release the HAT."""
+        """Stop scanning and release the HAT.
+
+        Cancels the scan task, stops the hardware scan, and closes the HAT
+        connection. Safe to call multiple times or when not running.
+        """
         if not self._running:
             return
 
@@ -249,7 +346,19 @@ class Mcc118Instrument:
     def _reshape_samples(
         self, raw_data: list[float], n_channels: int
     ) -> tuple[tuple[float, ...], ...]:
-        """Reshape interleaved scan data into per-sample tuples."""
+        """Reshape interleaved scan data into per-sample tuples.
+
+        The MCC 118 returns scan data as a flat list with channels interleaved:
+        [ch0_s0, ch1_s0, ch0_s1, ch1_s1, ...]. This method reshapes it into
+        a tuple of samples, each sample being a tuple of channel values.
+
+        Args:
+            raw_data: Flat list of interleaved voltage samples.
+            n_channels: Number of channels in the scan.
+
+        Returns:
+            Tuple of samples, where each sample is a tuple of channel values.
+        """
         n_samples = len(raw_data) // n_channels
         samples: list[tuple[float, ...]] = []
         for i in range(n_samples):
@@ -258,7 +367,12 @@ class Mcc118Instrument:
         return tuple(samples)
 
     async def _scan_loop(self) -> None:
-        """Read samples from the HAT and publish StreamData batches."""
+        """Read samples from the HAT and publish StreamData batches.
+
+        Runs continuously until :meth:`stop` is called. Reads samples in
+        batches from the hardware buffer, reshapes them, and publishes
+        StreamData messages. Handles buffer overruns by logging warnings.
+        """
         n_channels = len(self._config.channels)
         batch_size = max(1, int(self._actual_sample_rate / 10))
         period_ns = int(1_000_000_000 / self._actual_sample_rate)

@@ -27,7 +27,13 @@ from typing import Any
 
 @dataclass
 class HatInfo:
-    """Information about a detected MCC HAT."""
+    """Information about a detected MCC HAT.
+
+    Attributes:
+        address: HAT address on the stack (0-7).
+        model: Model name (e.g., "MCC 118", "MCC 134", "MCC 152").
+        serial: Serial number string from the HAT's EEPROM.
+    """
 
     address: int
     model: str

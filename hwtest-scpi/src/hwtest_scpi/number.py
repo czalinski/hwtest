@@ -1,8 +1,16 @@
 """SCPI number parsing and formatting utilities.
 
-Handles NR1 (integer), NR2 (fixed-point), and NR3 (scientific notation)
-numeric formats as well as the special values defined by SCPI (NAN, INF,
-NINF, MIN, MAX, DEF).
+This module provides functions for parsing and formatting numeric values
+in SCPI protocol format. It handles the standard SCPI numeric response
+formats:
+
+- NR1: Integer format (e.g., ``"42"``, ``"-123"``)
+- NR2: Fixed-point format (e.g., ``"1.23"``, ``"-0.5"``)
+- NR3: Scientific notation (e.g., ``"1.23E+4"``, ``"-5.67E-8"``)
+
+It also handles SCPI special values:
+- ``NAN``, ``INF``, ``NINF`` (``-INF``): IEEE 754 special values
+- ``MIN``, ``MAX``, ``DEF``: Parameter keywords
 """
 
 from __future__ import annotations
@@ -12,7 +20,19 @@ from enum import Enum
 
 
 class ScpiSpecial(Enum):
-    """SCPI special parameter values."""
+    """SCPI special parameter values.
+
+    These keywords can be used as parameter values in SCPI commands to
+    request minimum, maximum, or default settings.
+
+    Attributes:
+        MIN: Request minimum value for a parameter.
+        MAX: Request maximum value for a parameter.
+        DEF: Request default value for a parameter.
+        NAN: IEEE 754 Not-a-Number.
+        INF: IEEE 754 positive infinity.
+        NINF: IEEE 754 negative infinity.
+    """
 
     MIN = "MIN"
     MAX = "MAX"

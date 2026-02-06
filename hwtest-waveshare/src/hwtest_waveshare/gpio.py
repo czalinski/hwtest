@@ -18,7 +18,17 @@ HIGH = 1
 
 
 class GpioPin:
-    """Represents a single GPIO pin with direction and state."""
+    """Represents a single GPIO pin with direction and state.
+
+    This class wraps a GPIO pin claimed via lgpio, providing simple
+    read/write operations. Pins are automatically claimed on construction.
+
+    Attributes:
+        _lgpio: Reference to the lgpio module.
+        _chip: GPIO chip handle from gpiochip_open().
+        _pin: BCM pin number.
+        _direction: Pin direction (INPUT or OUTPUT).
+    """
 
     def __init__(
         self,
@@ -28,6 +38,15 @@ class GpioPin:
         initial: int = LOW,
         lgpio_module: Any = None,
     ) -> None:
+        """Initialize and claim a GPIO pin.
+
+        Args:
+            chip_handle: Handle from gpiochip_open().
+            pin: BCM pin number.
+            direction: Pin direction (INPUT or OUTPUT).
+            initial: Initial value for output pins (LOW or HIGH).
+            lgpio_module: Reference to the lgpio module.
+        """
         self._lgpio = lgpio_module
         self._chip = chip_handle
         self._pin = pin
@@ -39,16 +58,28 @@ class GpioPin:
             self._lgpio.gpio_claim_input(chip_handle, pin)
 
     def read(self) -> int:
-        """Read the pin value."""
+        """Read the current pin value.
+
+        Returns:
+            Pin value (0 or 1).
+        """
         result: int = self._lgpio.gpio_read(self._chip, self._pin)
         return result
 
     def write(self, value: int) -> None:
-        """Write a value to the pin."""
+        """Write a value to the pin.
+
+        Args:
+            value: Value to write (0 or 1).
+        """
         self._lgpio.gpio_write(self._chip, self._pin, value)
 
     def release(self) -> None:
-        """Release the pin."""
+        """Release the pin back to the system.
+
+        This frees the GPIO claim, allowing other processes to use the pin.
+        Errors during release are silently ignored.
+        """
         try:
             self._lgpio.gpio_free(self._chip, self._pin)
         except Exception:  # pylint: disable=broad-exception-caught
@@ -66,6 +97,11 @@ class Gpio:
     """
 
     def __init__(self, chip: int = 0) -> None:
+        """Initialize the GPIO interface.
+
+        Args:
+            chip: GPIO chip number (default 0 for main GPIO).
+        """
         self._chip = chip
         self._handle: int | None = None
         self._pins: dict[int, GpioPin] = {}

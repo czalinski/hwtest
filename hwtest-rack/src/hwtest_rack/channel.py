@@ -40,7 +40,16 @@ logger = logging.getLogger(__name__)
 
 
 class ChannelType(Enum):
-    """Type of logical channel."""
+    """Type of logical channel.
+
+    Used to determine the appropriate interface protocol for a channel.
+
+    Attributes:
+        PSU: DC power supply output channel.
+        LOAD: Electronic load input channel.
+        DAQ_ANALOG: DAQ analog input/output channel.
+        DAQ_DIGITAL: DAQ digital I/O channel.
+    """
 
     PSU = "psu"  # DC power supply output
     LOAD = "load"  # Electronic load input
@@ -67,7 +76,11 @@ class LogicalChannel:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __hash__(self) -> int:
-        """Hash based on logical name only."""
+        """Hash based on logical name only.
+
+        Returns:
+            Hash of the logical_name string.
+        """
         return hash(self.logical_name)
 
 
@@ -182,9 +195,20 @@ class ChannelRegistry:
         return list(self._channels.values())
 
     def __contains__(self, logical_name: str) -> bool:
-        """Check if a logical name is registered."""
+        """Check if a logical name is registered.
+
+        Args:
+            logical_name: The logical name to check.
+
+        Returns:
+            True if the logical name is registered.
+        """
         return logical_name in self._channels
 
     def __len__(self) -> int:
-        """Return the number of registered channels."""
+        """Return the number of registered channels.
+
+        Returns:
+            The count of registered logical channels.
+        """
         return len(self._channels)

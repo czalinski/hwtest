@@ -1,7 +1,16 @@
 """CAN bus interface for UUT simulator.
 
-Provides a simple interface to SocketCAN for sending and receiving CAN messages.
-Supports both standard CAN and CAN FD frames.
+This module provides a simple interface to SocketCAN for sending and receiving
+CAN messages. It supports both standard CAN and CAN FD frames, with async
+receive capabilities and callback-based message handling.
+
+Example:
+    >>> config = CanConfig(interface="can0", bitrate=500000)
+    >>> can = CanInterface(config)
+    >>> can.open()
+    >>> can.send_data(0x123, [1, 2, 3, 4])
+    >>> msg = can.receive(timeout=1.0)
+    >>> can.close()
 """
 
 from __future__ import annotations
@@ -16,15 +25,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CanMessage:
-    """A CAN message.
+    """A CAN message representation.
 
-    Args:
+    Encapsulates a CAN frame with arbitration ID, data payload, and frame type
+    information. Supports both standard CAN (8 bytes max) and CAN FD (64 bytes max).
+
+    Attributes:
         arbitration_id: CAN arbitration ID (11-bit standard or 29-bit extended).
-        data: Message data (0-8 bytes for CAN, 0-64 bytes for CAN FD).
+        data: Message data payload as bytes.
         is_extended_id: True for 29-bit extended ID, False for 11-bit standard.
         is_fd: True for CAN FD frame.
         bitrate_switch: True if CAN FD bitrate switch is enabled.
-        timestamp: Message timestamp (set by receiver).
+        timestamp: Message timestamp in seconds (set by receiver).
+
+    Raises:
+        ValueError: If data length exceeds maximum for frame type.
     """
 
     arbitration_id: int
@@ -35,7 +50,13 @@ class CanMessage:
     timestamp: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate message data."""
+        """Validate and normalize message data.
+
+        Converts list/tuple data to bytes and validates length constraints.
+
+        Raises:
+            ValueError: If data length exceeds maximum for frame type.
+        """
         if isinstance(self.data, (list, tuple)):
             self.data = bytes(self.data)
         max_len = 64 if self.is_fd else 8
@@ -47,11 +68,14 @@ class CanMessage:
 class CanConfig:
     """Configuration for the CAN interface.
 
-    Args:
+    Immutable configuration specifying the CAN interface parameters including
+    interface name, bitrate, and CAN FD settings.
+
+    Attributes:
         interface: CAN interface name (e.g., "can0").
-        bitrate: CAN bitrate in bits/second.
-        fd: Enable CAN FD mode.
-        data_bitrate: CAN FD data phase bitrate (if fd=True).
+        bitrate: CAN bitrate in bits/second (default 500000).
+        fd: Enable CAN FD mode (default False).
+        data_bitrate: CAN FD data phase bitrate in bits/second (default 2000000).
     """
 
     interface: str = "can0"
@@ -60,18 +84,31 @@ class CanConfig:
     data_bitrate: int = 2000000
 
 
-# Type alias for message callback
+#: Type alias for message callback functions.
 MessageCallback = Callable[[CanMessage], None]
 
 
 class CanInterface:
     """CAN bus interface using python-can.
 
-    Provides async send/receive of CAN messages via SocketCAN.
+    Provides synchronous and asynchronous send/receive of CAN messages via
+    SocketCAN. Supports callback-based message handling for async receive loops.
 
-    Args:
-        config: CAN interface configuration.
-        bus: Optional CAN bus object (for testing).
+    The interface must be opened before use and should be closed when done to
+    release system resources.
+
+    Attributes:
+        config: The interface configuration (read-only).
+        is_open: True if the interface is currently open.
+
+    Example:
+        >>> can = CanInterface(CanConfig(interface="can0"))
+        >>> can.open()
+        >>> can.add_callback(lambda msg: print(f"Received: {msg}"))
+        >>> await can.start_receiving()
+        >>> # ... do work ...
+        >>> await can.stop_receiving()
+        >>> can.close()
     """
 
     def __init__(
@@ -79,6 +116,12 @@ class CanInterface:
         config: CanConfig | None = None,
         bus: Any | None = None,
     ) -> None:
+        """Initialize the CAN interface.
+
+        Args:
+            config: CAN interface configuration. Uses defaults if None.
+            bus: Optional pre-configured CAN bus object for testing/mocking.
+        """
         self._config = config or CanConfig()
         self._bus = bus
         self._opened = False
@@ -125,7 +168,12 @@ class CanInterface:
         self._opened = True
 
     def close(self) -> None:
-        """Close the CAN interface."""
+        """Close the CAN interface and release resources.
+
+        Stops any active receive task, shuts down the CAN bus, and marks the
+        interface as closed. Safe to call multiple times or on an already
+        closed interface.
+        """
         if not self._opened:
             return
 
@@ -273,7 +321,11 @@ class CanInterface:
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def stop_receiving(self) -> None:
-        """Stop the async receive loop."""
+        """Stop the async receive loop.
+
+        Cancels the background receive task and waits for it to complete.
+        Safe to call if the receive loop is not running.
+        """
         self._running = False
 
         if self._receive_task is not None:
@@ -285,7 +337,12 @@ class CanInterface:
             self._receive_task = None
 
     async def _receive_loop(self) -> None:
-        """Background task for receiving messages."""
+        """Background task for receiving messages.
+
+        Continuously polls for incoming CAN messages and dispatches them to
+        registered callbacks. Runs until stop_receiving() is called or the
+        task is cancelled.
+        """
         assert self._bus is not None
         loop = asyncio.get_running_loop()
 

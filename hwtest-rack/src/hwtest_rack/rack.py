@@ -1,4 +1,23 @@
-"""Rack orchestration class for managing instruments."""
+"""Rack orchestration class for managing instruments.
+
+This module provides the main Rack class that orchestrates instrument
+lifecycle management including loading drivers, initializing instruments,
+verifying identities, and providing access to instruments and channels.
+
+Example:
+    config = load_config("rack.yaml")
+    rack = Rack(config)
+    rack.initialize()
+
+    # Access instrument by name
+    psu = rack.get_instrument("dc_psu_slot_3")
+
+    # Access channel by logical name
+    battery = rack.get_psu_channel("main_battery")
+    battery.set_voltage(12.0)
+
+    rack.close()
+"""
 
 from __future__ import annotations
 
@@ -24,10 +43,21 @@ logger = logging.getLogger(__name__)
 
 @runtime_checkable
 class Instrument(Protocol):
-    """Protocol for instruments that support identity queries."""
+    """Protocol for instruments that support identity queries.
+
+    This protocol is used for runtime type checking to determine if an
+    instrument instance supports identity verification. Instruments that
+    implement this protocol can have their identity verified against the
+    expected configuration.
+    """
 
     def get_identity(self) -> InstrumentIdentity:
-        """Return the instrument identity."""
+        """Return the instrument identity.
+
+        Returns:
+            InstrumentIdentity containing manufacturer, model, serial,
+            and firmware information.
+        """
         ...
 
 
@@ -35,12 +65,15 @@ class Instrument(Protocol):
 class ManagedInstrument:
     """An instrument managed by the rack.
 
-    Args:
-        config: Instrument configuration.
-        state: Current state of the instrument.
-        instance: The instrument instance (if initialized).
-        identity: The verified identity (if available).
-        error: Error message (if in error state).
+    Wraps an instrument instance with lifecycle state tracking and
+    error information for rack management.
+
+    Attributes:
+        config: Instrument configuration from YAML.
+        state: Current lifecycle state (PENDING, INITIALIZING, READY, ERROR, CLOSED).
+        instance: The instrument instance created by the driver factory.
+        identity: The verified identity returned by get_identity().
+        error: Error message if initialization failed or identity mismatched.
     """
 
     config: InstrumentConfig
@@ -78,18 +111,30 @@ class Rack:
     _state: str = field(default="initializing", init=False)
 
     def __post_init__(self) -> None:
-        """Initialize managed instruments from config."""
+        """Initialize managed instruments from config.
+
+        Creates ManagedInstrument wrappers for each instrument configuration.
+        All instruments start in the PENDING state.
+        """
         for inst_config in self.config.instruments:
             self._instruments[inst_config.name] = ManagedInstrument(config=inst_config)
 
     @property
     def rack_id(self) -> str:
-        """Return the rack ID."""
+        """Return the rack ID.
+
+        Returns:
+            The unique identifier for this rack from configuration.
+        """
         return self.config.rack_id
 
     @property
     def state(self) -> str:
-        """Return the overall rack state."""
+        """Return the overall rack state.
+
+        Returns:
+            One of "initializing", "ready", "error", or "closed".
+        """
         return self._state
 
     def initialize(self) -> None:
@@ -164,7 +209,13 @@ class Rack:
         self._state = "ready" if all_ready else "error"
 
     def close(self) -> None:
-        """Close all instruments."""
+        """Close all instruments.
+
+        Iterates through all instruments and calls their close() method
+        if available. Sets all instruments to CLOSED state and the rack
+        to "closed" state. Errors during close are logged but do not
+        prevent other instruments from being closed.
+        """
         for name, managed in self._instruments.items():
             if managed.instance is not None:
                 try:
@@ -273,7 +324,11 @@ class Rack:
 
     @property
     def channel_registry(self) -> ChannelRegistry:
-        """Return the channel registry for this rack."""
+        """Return the channel registry for this rack.
+
+        Returns:
+            The ChannelRegistry containing all logical channel mappings.
+        """
         return self.config.channel_registry
 
     def get_logical_channel(self, logical_name: str) -> LogicalChannel | None:

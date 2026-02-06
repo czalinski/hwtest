@@ -100,7 +100,12 @@ class HighPrecisionAdDaConfig:
     dac_cs_pin: int = 23
 
     def __post_init__(self) -> None:
-        """Validate configuration parameters."""
+        """Validate configuration parameters.
+
+        Raises:
+            ValueError: If channel IDs are out of range, names are duplicated,
+                or initial voltages are out of range.
+        """
         # Validate ADC channels
         seen_ids: set[int] = set()
         seen_names: set[str] = set()
@@ -152,6 +157,13 @@ class HighPrecisionAdDaInstrument:
         config: HighPrecisionAdDaConfig,
         publisher: StreamPublisher | None = None,
     ) -> None:
+        """Initialize the High-Precision AD/DA instrument.
+
+        Args:
+            config: Instrument configuration specifying channels and settings.
+            publisher: Optional stream publisher for continuous ADC scanning.
+                If None, only direct read/write methods are available.
+        """
         self._config = config
         self._publisher = publisher
 
@@ -161,11 +173,11 @@ class HighPrecisionAdDaInstrument:
             fields=tuple(StreamField(ch.name, DataType.F64, "V") for ch in config.adc_channels),
         )
 
-        # Build channel name lookup
+        # Build channel name lookup for O(1) access
         self._adc_by_name: dict[str, AdcChannel] = {ch.name: ch for ch in config.adc_channels}
         self._dac_by_name: dict[str, DacChannel] = {ch.name: ch for ch in config.dac_channels}
 
-        # Device handles
+        # Device handles (initialized on start)
         self._adc: Ads1256 | None = None
         self._dac: Dac8532 | None = None
         self._running = False
@@ -173,17 +185,29 @@ class HighPrecisionAdDaInstrument:
 
     @property
     def schema(self) -> StreamSchema:
-        """The stream schema for this instrument's ADC channels."""
+        """The stream schema for this instrument's ADC channels.
+
+        Returns:
+            Schema with one F64 field per configured ADC channel.
+        """
         return self._schema
 
     @property
     def actual_sample_rate(self) -> float:
-        """The actual ADC sample rate in Hz."""
+        """The actual ADC sample rate in samples per second.
+
+        Returns:
+            Sample rate in Hz based on the configured data rate.
+        """
         return DATA_RATE_VALUES[self._config.adc_data_rate]
 
     @property
     def is_running(self) -> bool:
-        """Return True if the instrument is actively scanning."""
+        """Whether the instrument is actively scanning and publishing data.
+
+        Returns:
+            True if start() has been called and stop() has not.
+        """
         return self._running
 
     def get_identity(self) -> InstrumentIdentity:
@@ -269,7 +293,11 @@ class HighPrecisionAdDaInstrument:
             self._task = asyncio.create_task(self._scan_loop())
 
     async def stop(self) -> None:
-        """Stop scanning and release the devices."""
+        """Stop scanning and release the hardware devices.
+
+        Cancels the scan loop task and closes both ADC and DAC.
+        Safe to call multiple times.
+        """
         if not self._running:
             return
 
@@ -300,7 +328,12 @@ class HighPrecisionAdDaInstrument:
             self._adc = None
 
     async def _scan_loop(self) -> None:
-        """Read ADC samples and publish StreamData batches."""
+        """Continuously read ADC samples and publish StreamData batches.
+
+        This internal method runs in a background task, reading all configured
+        ADC channels and publishing batches approximately 10 times per second.
+        The loop continues until stop() is called.
+        """
         if self._adc is None or self._publisher is None:
             return
 

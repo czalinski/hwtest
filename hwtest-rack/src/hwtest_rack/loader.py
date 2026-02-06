@@ -1,4 +1,14 @@
-"""Dynamic instrument driver loading via importlib."""
+"""Dynamic instrument driver loading via importlib.
+
+This module provides functionality to dynamically load instrument driver
+factory functions at runtime using Python's importlib. This allows the
+test rack to load drivers specified in YAML configuration files without
+requiring static imports.
+
+Example:
+    factory = load_driver("hwtest_bkprecision.psu:create_instrument")
+    instrument = factory(visa_address="TCPIP::192.168.1.100::5025::SOCKET")
+"""
 
 from __future__ import annotations
 

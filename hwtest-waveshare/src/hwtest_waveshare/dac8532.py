@@ -41,24 +41,36 @@ if TYPE_CHECKING:
 
 
 class Dac8532Channel:
-    """DAC8532 channel identifiers."""
+    """DAC8532 channel identifiers.
+
+    The DAC8532 has two independent output channels. Use these constants
+    when specifying which channel to write.
+
+    Attributes:
+        CHANNEL_A: First DAC channel (output 0).
+        CHANNEL_B: Second DAC channel (output 1).
+    """
 
     CHANNEL_A = 0
     CHANNEL_B = 1
 
 
 class _Dac8532Cmd:
-    """DAC8532 command bytes."""
+    """DAC8532 command bytes.
 
-    # Control bits: [X X LDA LDB BUF X X X]
-    # For direct write to DAC register:
-    WRITE_A = 0x10  # Write to channel A input register, update channel A output
-    WRITE_B = 0x24  # Write to channel B input register, update channel B output
-    WRITE_BOTH = 0x34  # Write to channel B, update both outputs
+    The command byte format is: [X X LDA LDB BUF X X X]
+    where LDA/LDB control which DAC registers are loaded from
+    their input registers, and BUF selects buffered mode.
+    """
+
+    # Direct write to DAC register
+    WRITE_A = 0x10    # Write to channel A input register, update channel A output
+    WRITE_B = 0x24    # Write to channel B input register, update channel B output
+    WRITE_BOTH = 0x34 # Write to channel B input register, update both outputs
 
 
-# Default GPIO pin for DAC chip select
-_DEFAULT_DAC_CS_PIN = 23
+# Default GPIO pin for DAC chip select on Waveshare High-Precision AD/DA board
+_DEFAULT_DAC_CS_PIN = 23  # Chip select (directly controlled, not SPI CE)
 
 
 @dataclass(frozen=True)
@@ -96,21 +108,36 @@ class Dac8532:
         spi: Any | None = None,
         gpio: Any | None = None,
     ) -> None:
+        """Initialize the DAC8532 driver.
+
+        Args:
+            config: DAC configuration. If None, uses default configuration.
+            spi: Optional SPI device for testing. If None, uses spidev.
+            gpio: Optional GPIO interface for testing. If None, uses lgpio.
+        """
         self._config = config or Dac8532Config()
         self._spi = spi
         self._gpio = gpio
         self._opened = False
-        # Track current output values
+        # Track current output values (DAC8532 does not support readback)
         self._channel_values: list[int] = [0, 0]
 
     @property
     def config(self) -> Dac8532Config:
-        """Return the DAC configuration."""
+        """The DAC configuration.
+
+        Returns:
+            Frozen configuration dataclass.
+        """
         return self._config
 
     @property
     def is_open(self) -> bool:
-        """Return True if the device is open."""
+        """Whether the device is open and ready for operations.
+
+        Returns:
+            True if open() has been called successfully.
+        """
         return self._opened
 
     def open(self) -> None:
@@ -154,7 +181,11 @@ class Dac8532:
         self.write_raw(Dac8532Channel.CHANNEL_B, 0)
 
     def close(self) -> None:
-        """Close the SPI device and release GPIO."""
+        """Close the SPI device and release GPIO resources.
+
+        Sets both DAC outputs to 0V before closing for safety.
+        Safe to call multiple times. Errors during cleanup are silently ignored.
+        """
         if not self._opened:
             return
 
@@ -180,12 +211,12 @@ class Dac8532:
         self._opened = False
 
     def _cs_low(self) -> None:
-        """Assert chip select (active low)."""
+        """Assert chip select (drive low to select device)."""
         assert self._gpio is not None
         self._gpio.output(self._config.cs_pin, LOW)
 
     def _cs_high(self) -> None:
-        """Deassert chip select."""
+        """Deassert chip select (drive high to deselect device)."""
         assert self._gpio is not None
         self._gpio.output(self._config.cs_pin, HIGH)
 

@@ -1,4 +1,25 @@
-"""FastAPI server for test rack REST API."""
+"""FastAPI server for test rack REST API.
+
+This module provides a FastAPI-based REST API for test rack status and
+instrument discovery. The server loads rack configuration from a YAML file
+and provides endpoints for health checks, status monitoring, and instrument
+information.
+
+Endpoints:
+    GET /         : HTML dashboard with instrument status
+    GET /health   : Health check endpoint for monitoring
+    GET /status   : Full rack status as JSON
+    GET /instruments         : List all instrument statuses
+    GET /instruments/{name}  : Get specific instrument status
+
+Example:
+    # Start the server
+    hwtest-rack configs/rack.yaml --port 8000
+
+    # Or programmatically
+    from hwtest_rack.server import create_app
+    app = create_app("rack.yaml")
+"""
 
 from __future__ import annotations
 
@@ -23,7 +44,14 @@ _rack: Rack | None = None
 
 
 def _get_rack() -> Rack:
-    """Get the global rack instance."""
+    """Get the global rack instance.
+
+    Returns:
+        The initialized Rack instance.
+
+    Raises:
+        RuntimeError: If the rack has not been initialized.
+    """
     if _rack is None:
         raise RuntimeError("Rack not initialized")
     return _rack
@@ -44,7 +72,13 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        """Application lifespan handler."""
+        """Application lifespan handler.
+
+        Initializes the rack on startup and closes it on shutdown.
+
+        Yields:
+            None during application lifetime.
+        """
         global _rack  # pylint: disable=global-statement
 
         cfg_path = app_state.get("config_path")
@@ -86,7 +120,12 @@ def create_app(config_path: str | Path | None = None) -> FastAPI:
 
 
 async def _dashboard() -> HTMLResponse:
-    """HTML dashboard showing all instruments."""
+    """HTML dashboard showing all instruments.
+
+    Returns:
+        HTMLResponse with a styled dashboard showing rack status and
+        all instrument states with their identities and any errors.
+    """
     rack = _get_rack()
     status = rack.get_status()
 
@@ -234,7 +273,12 @@ async def _dashboard() -> HTMLResponse:
 
 
 async def _health() -> HealthResponse:
-    """Health check endpoint."""
+    """Health check endpoint.
+
+    Returns:
+        HealthResponse with status "ok" if rack is ready, otherwise
+        the current rack state.
+    """
     rack = _get_rack()
     return HealthResponse(
         status="ok" if rack.state == "ready" else rack.state,
@@ -243,19 +287,37 @@ async def _health() -> HealthResponse:
 
 
 async def _status() -> RackStatus:
-    """Get full rack status."""
+    """Get full rack status.
+
+    Returns:
+        RackStatus containing rack info and all instrument statuses.
+    """
     rack = _get_rack()
     return rack.get_status()
 
 
 async def _list_instruments() -> list[InstrumentStatus]:
-    """List all instruments."""
+    """List all instruments.
+
+    Returns:
+        List of InstrumentStatus for all configured instruments.
+    """
     rack = _get_rack()
     return rack.list_instruments()
 
 
 async def _get_instrument(name: str) -> InstrumentStatus:
-    """Get a specific instrument's status."""
+    """Get a specific instrument's status.
+
+    Args:
+        name: The instrument name to look up.
+
+    Returns:
+        InstrumentStatus for the requested instrument.
+
+    Raises:
+        HTTPException: 404 if instrument name not found.
+    """
     rack = _get_rack()
     status = rack.get_instrument_status(name)
     if status is None:
@@ -264,7 +326,11 @@ async def _get_instrument(name: str) -> InstrumentStatus:
 
 
 def main() -> None:
-    """Command-line entry point."""
+    """Command-line entry point for the rack server.
+
+    Parses command-line arguments, configures logging, and starts the
+    uvicorn server with the specified configuration file.
+    """
     parser = argparse.ArgumentParser(description="Start the hwtest rack server")
     parser.add_argument(
         "config",

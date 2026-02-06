@@ -1,4 +1,18 @@
-"""Monitor interfaces."""
+"""Monitor and threshold provider interfaces.
+
+This module defines protocols for telemetry monitoring and threshold
+management. Monitors continuously evaluate measurement data against
+state-dependent thresholds to detect out-of-specification conditions.
+
+The monitoring system supports:
+- State-dependent thresholds (different limits for different conditions)
+- Transition state handling (evaluation suspended during transitions)
+- Configurable violation callbacks for real-time alerts
+
+Protocols:
+    Monitor: Evaluate telemetry against thresholds.
+    ThresholdProvider: Supply thresholds for environmental states.
+"""
 
 # pylint: disable=unnecessary-ellipsis  # Ellipsis required for Protocol method stubs
 
@@ -14,15 +28,24 @@ from hwtest_core.types.threshold import StateThresholds
 
 
 class Monitor(Protocol):
-    """Interface for a telemetry monitor.
+    """Protocol for telemetry monitoring with threshold evaluation.
 
-    Monitors continuously evaluate telemetry data against thresholds
-    for the current environmental state.
+    Monitors subscribe to telemetry data and continuously evaluate
+    measurements against thresholds appropriate for the current
+    environmental state. They produce MonitorResult records indicating
+    pass/fail status and any threshold violations.
+
+    Typical implementations integrate with NATS for telemetry subscription
+    and state tracking.
     """
 
     @property
     def monitor_id(self) -> MonitorId:
-        """Unique identifier for this monitor."""
+        """Get the unique identifier for this monitor.
+
+        Returns:
+            The monitor's unique ID.
+        """
         ...
 
     async def evaluate(
@@ -31,7 +54,10 @@ class Monitor(Protocol):
         state: EnvironmentalState,
         thresholds: StateThresholds,
     ) -> MonitorResult:
-        """Evaluate telemetry values against thresholds for the given state.
+        """Evaluate telemetry values against thresholds.
+
+        This method performs a single evaluation cycle. For continuous
+        monitoring, use start() to begin automatic evaluation.
 
         Args:
             values: Telemetry values to evaluate.
@@ -39,39 +65,58 @@ class Monitor(Protocol):
             thresholds: Thresholds to evaluate against.
 
         Returns:
-            MonitorResult with verdict and any violations.
+            MonitorResult with verdict (PASS/FAIL/SKIP/ERROR)
+            and any threshold violations.
         """
         ...
 
     async def start(self) -> None:
-        """Start the monitor (begin continuous evaluation)."""
+        """Start continuous monitoring.
+
+        Begins subscribing to telemetry and evaluating against
+        state-dependent thresholds automatically.
+        """
         ...
 
     async def stop(self) -> None:
-        """Stop the monitor."""
+        """Stop continuous monitoring.
+
+        Stops telemetry subscription and evaluation. Safe to call
+        even if not running.
+        """
         ...
 
     @property
     def is_running(self) -> bool:
-        """Return True if the monitor is running."""
+        """Check if the monitor is running.
+
+        Returns:
+            True if continuous monitoring is active.
+        """
         ...
 
 
 class ThresholdProvider(Protocol):
-    """Interface for retrieving thresholds by state.
+    """Protocol for retrieving state-dependent thresholds.
 
-    Implementations may load thresholds from files, databases,
-    or other configuration sources.
+    Implementations load threshold definitions from various sources:
+    - YAML configuration files
+    - Database tables
+    - Remote configuration services
+
+    The provider is queried by monitors to obtain appropriate
+    thresholds for the current environmental state.
     """
 
     def get_thresholds(self, state_id: StateId) -> StateThresholds | None:
-        """Get thresholds for a given environmental state.
+        """Get thresholds for a specific environmental state.
 
         Args:
-            state_id: The state to get thresholds for.
+            state_id: The state identifier to look up.
 
         Returns:
-            StateThresholds for the state, or None if no thresholds defined.
+            StateThresholds containing channel thresholds for the state,
+            or None if no thresholds are defined for this state.
         """
         ...
 
@@ -79,6 +124,6 @@ class ThresholdProvider(Protocol):
         """Get all state IDs that have defined thresholds.
 
         Returns:
-            Iterable of StateIds with defined thresholds.
+            Iterable of StateId values for which thresholds exist.
         """
         ...

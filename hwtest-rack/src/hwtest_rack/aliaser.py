@@ -48,7 +48,16 @@ class AliasMapping:
 
 @dataclass
 class ActiveAlias:
-    """An active alias with its subscriber, publisher, and task."""
+    """An active alias with its subscriber, publisher, and task.
+
+    Tracks the runtime state of an alias including the background task
+    that handles republishing and the derived logical schema.
+
+    Attributes:
+        mapping: The alias mapping configuration.
+        logical_schema: The schema for the logical stream (derived from physical).
+        task: Background asyncio task handling the republishing loop.
+    """
 
     mapping: AliasMapping
     logical_schema: StreamSchema
@@ -94,13 +103,23 @@ class StreamAliaser:
 
     @property
     def is_running(self) -> bool:
-        """Return True if the aliaser is running."""
+        """Return True if the aliaser is running.
+
+        Returns:
+            True if start() has been called and stop() has not.
+        """
         return self._running
 
     async def start(self) -> None:
         """Start the aliaser and connect to NATS.
 
-        If NATS is not configured, operates in offline mode.
+        If NATS is not configured, operates in offline mode where aliases
+        are tracked but no actual republishing occurs. This allows testing
+        without a NATS server.
+
+        Raises:
+            ImportError: Logged as warning if hwtest-nats not installed
+                (falls back to offline mode).
         """
         if self._running:
             return
@@ -124,7 +143,11 @@ class StreamAliaser:
             self._running = True
 
     async def stop(self) -> None:
-        """Stop the aliaser and all active alias tasks."""
+        """Stop the aliaser and all active alias tasks.
+
+        Cancels all background alias tasks, clears the alias registry,
+        and disconnects from NATS. Safe to call multiple times.
+        """
         if not self._running:
             return
 
@@ -264,7 +287,15 @@ class StreamAliaser:
         return alias.mapping
 
     async def _alias_loop(self, mapping: AliasMapping) -> None:
-        """Background task that subscribes to physical stream and republishes."""
+        """Background task that subscribes to physical stream and republishes.
+
+        Subscribes to the physical source stream, waits for its schema,
+        builds a logical schema, creates a publisher for the logical stream,
+        and continuously republishes received data.
+
+        Args:
+            mapping: The alias mapping configuration.
+        """
         try:
             from hwtest_nats import (  # type: ignore[import-not-found]
                 NatsStreamPublisher,
@@ -417,7 +448,13 @@ class StreamAliaser:
         )
 
     async def __aenter__(self) -> StreamAliaser:
-        """Enter async context."""
+        """Enter async context.
+
+        Starts the aliaser and returns self for use in async with blocks.
+
+        Returns:
+            This StreamAliaser instance.
+        """
         await self.start()
         return self
 
@@ -427,5 +464,13 @@ class StreamAliaser:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        """Exit async context."""
+        """Exit async context.
+
+        Stops the aliaser, cancelling all alias tasks and disconnecting from NATS.
+
+        Args:
+            exc_type: Exception type if an exception was raised.
+            exc_val: Exception value if an exception was raised.
+            exc_tb: Exception traceback if an exception was raised.
+        """
         await self.stop()

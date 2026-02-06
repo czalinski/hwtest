@@ -1,14 +1,23 @@
 """ADS1263 32-bit ADC driver for Waveshare High-Precision AD HAT.
 
-The ADS1263 is a 10-channel 32-bit delta-sigma ADC:
-- 38.4 kSPS max sample rate
-- Programmable gain (1x to 32x)
-- Internal 2.5V reference
-- Supports differential and single-ended inputs
+This module provides a driver for the ADS1263 32-bit delta-sigma ADC commonly
+found on Waveshare High-Precision AD/DA HAT boards. Key features:
+
+- 10-channel 32-bit ADC with up to 38.4 kSPS sample rate
+- Programmable gain amplifier (1x to 32x)
+- Internal 2.5V reference voltage
+- Supports both differential and single-ended inputs
 
 This driver uses software-controlled chip select (GPIO22) to allow
 coexistence with other SPI devices (like MCP2515 CAN controller)
 that use hardware chip selects.
+
+Example:
+    >>> adc = Ads1263(Ads1263Config(spi_bus=0, spi_device=1))
+    >>> adc.open()
+    >>> voltage = adc.read_voltage(channel=0)
+    >>> print(f"Channel 0: {voltage:.6f}V")
+    >>> adc.close()
 """
 
 from __future__ import annotations
@@ -20,7 +29,11 @@ from typing import Any
 
 
 class Ads1263Register(IntEnum):
-    """ADS1263 register addresses."""
+    """ADS1263 register addresses.
+
+    Complete register map for the ADS1263 ADC. Registers control ADC
+    configuration, input multiplexing, calibration, and GPIO functions.
+    """
 
     ID = 0x00
     POWER = 0x01
@@ -52,7 +65,11 @@ class Ads1263Register(IntEnum):
 
 
 class Ads1263Command(IntEnum):
-    """ADS1263 SPI commands."""
+    """ADS1263 SPI command opcodes.
+
+    Command bytes sent over SPI to control ADC operation, read data,
+    perform calibration, and access registers.
+    """
 
     NOP = 0x00
     RESET = 0x06
@@ -73,7 +90,19 @@ class Ads1263Command(IntEnum):
 
 
 class Ads1263Gain(IntEnum):
-    """Programmable gain amplifier settings."""
+    """Programmable gain amplifier (PGA) settings.
+
+    Higher gain values provide better resolution for small signals but
+    reduce the full-scale input range (VREF/gain).
+
+    Attributes:
+        GAIN_1: Unity gain (1x), full scale = +/- VREF.
+        GAIN_2: 2x gain, full scale = +/- VREF/2.
+        GAIN_4: 4x gain, full scale = +/- VREF/4.
+        GAIN_8: 8x gain, full scale = +/- VREF/8.
+        GAIN_16: 16x gain, full scale = +/- VREF/16.
+        GAIN_32: 32x gain, full scale = +/- VREF/32.
+    """
 
     GAIN_1 = 0
     GAIN_2 = 1
@@ -84,7 +113,29 @@ class Ads1263Gain(IntEnum):
 
 
 class Ads1263DataRate(IntEnum):
-    """ADC1 data rate settings (samples per second)."""
+    """ADC1 data rate settings in samples per second.
+
+    Higher data rates provide faster conversions but with more noise.
+    Lower data rates provide better noise rejection and accuracy.
+
+    Attributes:
+        SPS_2_5: 2.5 samples per second (lowest noise).
+        SPS_5: 5 samples per second.
+        SPS_10: 10 samples per second.
+        SPS_16_6: 16.6 samples per second.
+        SPS_20: 20 samples per second.
+        SPS_50: 50 samples per second.
+        SPS_60: 60 samples per second.
+        SPS_100: 100 samples per second.
+        SPS_400: 400 samples per second.
+        SPS_1200: 1200 samples per second.
+        SPS_2400: 2400 samples per second.
+        SPS_4800: 4800 samples per second.
+        SPS_7200: 7200 samples per second.
+        SPS_14400: 14400 samples per second.
+        SPS_19200: 19200 samples per second.
+        SPS_38400: 38400 samples per second (fastest).
+    """
 
     SPS_2_5 = 0
     SPS_5 = 1
@@ -108,14 +159,18 @@ class Ads1263DataRate(IntEnum):
 class Ads1263Config:
     """Configuration for the ADS1263 ADC.
 
-    Args:
+    Immutable configuration specifying SPI bus, GPIO pins, and ADC parameters.
+    Default pin assignments are configured for coexistence with a CAN HAT
+    that uses SPI0 CE0.
+
+    Attributes:
         spi_bus: SPI bus number (default 0).
         spi_device: SPI device number (default 1 to avoid conflict with CAN).
-        cs_pin: GPIO pin for software chip select (default 22).
-        drdy_pin: GPIO pin for data ready signal (default 17).
-        reset_pin: GPIO pin for hardware reset (default 18).
-        vref: Reference voltage (default 2.5V internal).
-        gain: Programmable gain setting.
+        cs_pin: GPIO pin (BCM) for software chip select (default 22).
+        drdy_pin: GPIO pin (BCM) for data ready signal (default 17).
+        reset_pin: GPIO pin (BCM) for hardware reset (default 18).
+        vref: Reference voltage in volts (default 2.5V internal).
+        gain: Programmable gain amplifier setting.
         data_rate: Sample rate setting.
     """
 
@@ -135,10 +190,26 @@ class Ads1263:
     Uses software-controlled chip select to allow sharing the SPI bus
     with other devices (e.g., MCP2515 CAN controller on spidev0.0).
 
-    Args:
-        config: ADC configuration.
-        spi: Optional SPI device object (for testing).
-        gpio: Optional GPIO module (for testing).
+    The device must be opened before use and should be closed when done
+    to release SPI and GPIO resources.
+
+    Attributes:
+        AIN0-AIN9: Input channel constants (0-9).
+        AINCOM: Common/ground reference input (10).
+        TEMP_SENSOR_P: Positive temperature sensor input (11).
+        TEMP_SENSOR_N: Negative temperature sensor input (12).
+        VAVDD: Analog supply voltage input (13).
+        VAVSS: Analog ground reference input (14).
+        FLOAT: Floating/disconnected input (15).
+        config: The ADC configuration (read-only).
+        is_open: True if the device is currently open.
+
+    Example:
+        >>> adc = Ads1263(Ads1263Config(gain=Ads1263Gain.GAIN_1))
+        >>> adc.open()
+        >>> voltage = adc.read_voltage(channel=0)
+        >>> diff = adc.read_differential(positive=0, negative=1)
+        >>> adc.close()
     """
 
     # Input multiplexer channel definitions
@@ -165,6 +236,13 @@ class Ads1263:
         spi: Any | None = None,
         gpio: Any | None = None,
     ) -> None:
+        """Initialize the ADS1263 driver.
+
+        Args:
+            config: ADC configuration. Uses defaults if None.
+            spi: Optional pre-configured SPI device object for testing/mocking.
+            gpio: Optional GPIO module for testing/mocking.
+        """
         self._config = config or Ads1263Config()
         self._spi = spi
         self._gpio = gpio
@@ -233,7 +311,11 @@ class Ads1263:
         self._init_adc()
 
     def close(self) -> None:
-        """Close the SPI bus and release GPIO."""
+        """Close the SPI bus and release GPIO resources.
+
+        Cleans up SPI device and GPIO pins. Safe to call multiple times
+        or on an already closed device.
+        """
         if not self._opened:
             return
 
@@ -256,7 +338,11 @@ class Ads1263:
         self._opened = False
 
     def _reset(self) -> None:
-        """Perform hardware reset."""
+        """Perform hardware reset via the reset pin.
+
+        Pulses the reset pin low for 100ms then waits 500ms for the
+        device to complete its power-on sequence.
+        """
         assert self._gpio is not None
         self._gpio.output(self._config.reset_pin, self._gpio.LOW)
         time.sleep(0.1)
@@ -264,7 +350,11 @@ class Ads1263:
         time.sleep(0.5)
 
     def _init_adc(self) -> None:
-        """Initialize the ADC with default settings."""
+        """Initialize the ADC with configured settings.
+
+        Sends a software reset command and configures the MODE2 register
+        with the specified gain and data rate settings.
+        """
         # Send reset command
         self._cs_low()
         self._spi_write([Ads1263Command.RESET])
@@ -276,18 +366,25 @@ class Ads1263:
         self._write_register(Ads1263Register.MODE2, mode2)
 
     def _cs_low(self) -> None:
-        """Assert chip select (active low)."""
+        """Assert chip select (active low) with settling delay."""
         assert self._gpio is not None
         self._gpio.output(self._config.cs_pin, self._gpio.LOW)
         time.sleep(0.00001)
 
     def _cs_high(self) -> None:
-        """Deassert chip select."""
+        """Deassert chip select (set high)."""
         assert self._gpio is not None
         self._gpio.output(self._config.cs_pin, self._gpio.HIGH)
 
     def _spi_write(self, data: list[int]) -> list[int]:
-        """Write data to SPI and return response."""
+        """Write data to SPI and return response.
+
+        Args:
+            data: List of bytes to write.
+
+        Returns:
+            List of bytes read during the transfer.
+        """
         assert self._spi is not None
         result: list[int] = self._spi.xfer2(data)
         return result

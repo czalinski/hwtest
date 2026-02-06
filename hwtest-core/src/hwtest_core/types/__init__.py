@@ -1,4 +1,19 @@
-"""Core data types for hwtest."""
+"""Core data types for hwtest.
+
+This package provides all fundamental data types used throughout the hwtest
+framework. Types are organized into submodules by domain:
+
+Submodules:
+    common: Base types (Timestamp, SourceId, ChannelId, DataType, InstrumentIdentity)
+    telemetry: Telemetry data types (TelemetryValue, TelemetryMessage, ValueQuality)
+    streaming: Binary streaming protocol types (StreamField, StreamSchema, StreamData)
+    state: Environmental state types (EnvironmentalState, StateTransition)
+    threshold: Threshold types (Threshold, ThresholdBound, StateThresholds)
+    bounds: Bound check types for field monitoring (WithinTolerance, WithinRange, etc.)
+    monitor: Monitor result types (MonitorResult, MonitorVerdict, ThresholdViolation)
+
+All types are exported from this package for convenience.
+"""
 
 from hwtest_core.types.bounds import (
     BadInterval,

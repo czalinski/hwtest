@@ -1,7 +1,24 @@
 """UUT (Unit Under Test) simulator.
 
-Integrates CAN bus, DAC, ADC, and GPIO for simulating a device under test.
-Controllable over REST API for integration testing scenarios.
+This module provides the main simulator class that integrates CAN bus, DAC, ADC,
+and GPIO interfaces for simulating a device under test. The simulator is
+designed for HASS/HALT integration testing scenarios.
+
+Key features:
+- CAN bus communication with echo mode and heartbeat
+- DAC voltage output with failure injection support
+- ADC voltage input
+- Digital I/O via MCP23017 GPIO expander
+
+The simulator is controllable via a REST API (see server.py) for remote
+operation during automated testing.
+
+Example:
+    >>> config = SimulatorConfig(can_enabled=True, dac_enabled=True)
+    >>> sim = UutSimulator(config)
+    >>> sim.start()
+    >>> await sim.run()  # Runs until stop() is called
+    >>> sim.stop()
 """
 
 from __future__ import annotations
@@ -22,7 +39,10 @@ logger = logging.getLogger(__name__)
 class SimulatorConfig:
     """Configuration for the UUT simulator.
 
-    Args:
+    Mutable configuration specifying which interfaces to enable and their
+    parameters. Supports CAN, DAC, ADC, GPIO, and failure injection settings.
+
+    Attributes:
         can_enabled: Enable CAN bus interface.
         can_interface: CAN interface name (e.g., "can0").
         can_bitrate: CAN bitrate in bits/second.
@@ -30,13 +50,14 @@ class SimulatorConfig:
         can_heartbeat_id: CAN arbitration ID for heartbeat messages.
         can_heartbeat_interval_ms: Heartbeat interval in milliseconds (0 to disable).
         dac_enabled: Enable DAC output.
-        dac_vref: DAC reference voltage.
+        dac_vref: DAC reference voltage in volts.
         adc_enabled: Enable ADC input.
         gpio_enabled: Enable MCP23017 GPIO expander.
         gpio_i2c_bus: I2C bus number for GPIO expander.
         gpio_address: I2C address for GPIO expander (0x20-0x27).
         failure_delay_seconds: Delay before failure injection activates (0 to disable).
-        failure_duration_seconds: How long failure stays active before recovery (0 for permanent).
+        failure_duration_seconds: How long failure stays active before recovery
+            (0 for permanent failure).
         failure_voltage_offset: Voltage offset to add when failure is active.
     """
 
@@ -59,7 +80,15 @@ class SimulatorConfig:
 
 @dataclass
 class CanEchoState:
-    """State for CAN echo mode."""
+    """State for CAN echo mode.
+
+    Tracks whether echo mode is enabled and its configuration.
+
+    Attributes:
+        enabled: True if echo mode is active.
+        id_offset: Offset to add to echoed message arbitration IDs.
+        filter_ids: List of arbitration IDs to echo (empty = echo all).
+    """
 
     enabled: bool = False
     id_offset: int = 0
@@ -68,7 +97,16 @@ class CanEchoState:
 
 @dataclass
 class CanHeartbeatState:
-    """State for CAN heartbeat."""
+    """State for CAN heartbeat transmission.
+
+    Tracks heartbeat configuration and statistics.
+
+    Attributes:
+        running: True if heartbeat is currently being transmitted.
+        message_count: Total number of heartbeat messages sent.
+        arbitration_id: CAN arbitration ID for heartbeat messages.
+        interval_ms: Interval between heartbeats in milliseconds.
+    """
 
     running: bool = False
     message_count: int = 0
@@ -82,6 +120,15 @@ class FailureState:
 
     Supports cyclic failure: fail after delay, recover after duration, repeat.
     If duration_seconds is 0, failure is permanent once triggered.
+
+    Attributes:
+        enabled: True if failure injection is enabled.
+        delay_seconds: Time after first DAC write before failure activates.
+        duration_seconds: How long failure stays active (0 for permanent).
+        voltage_offset: Voltage offset to add during failure.
+        start_time: Timestamp when failure timing started (first DAC write).
+        active: True if failure is currently active.
+        cycle_count: Number of complete failure/recovery cycles.
     """
 
     enabled: bool = False
@@ -97,17 +144,25 @@ class UutSimulator:
     """UUT simulator integrating CAN, DAC, ADC, and GPIO.
 
     Provides a unified interface for controlling simulated device behavior:
-    - CAN message sending, receiving, and echo mode
-    - DAC voltage output
+    - CAN message sending, receiving, and echo mode with heartbeat
+    - DAC voltage output with failure injection support
     - ADC voltage input
     - Digital I/O via MCP23017 GPIO expander
 
-    Args:
-        config: Simulator configuration.
-        can_bus: Optional CAN bus object (for testing).
-        gpio_bus: Optional I2C bus object (for testing).
-        dac: Optional DAC object (for testing).
-        adc: Optional ADC object (for testing).
+    The simulator must be started before use and should be stopped when done
+    to release hardware resources.
+
+    Attributes:
+        config: The simulator configuration (read-only).
+        is_running: True if the simulator is currently running.
+        uptime: Time in seconds since the simulator was started.
+
+    Example:
+        >>> sim = UutSimulator(SimulatorConfig(can_enabled=True))
+        >>> sim.start()
+        >>> sim.dac_write(0, 2.5)
+        >>> voltage = sim.adc_read(0)
+        >>> sim.stop()
     """
 
     def __init__(
@@ -118,6 +173,15 @@ class UutSimulator:
         dac: Any | None = None,
         adc: Any | None = None,
     ) -> None:
+        """Initialize the UUT simulator.
+
+        Args:
+            config: Simulator configuration. Uses defaults if None.
+            can_bus: Optional pre-configured CAN bus object for testing/mocking.
+            gpio_bus: Optional pre-configured I2C bus object for testing/mocking.
+            dac: Optional DAC object for testing/mocking.
+            adc: Optional ADC object for testing/mocking.
+        """
         self._config = config or SimulatorConfig()
         self._start_time = time.time()
         self._running = False
@@ -231,7 +295,11 @@ class UutSimulator:
         logger.info("UUT simulator started")
 
     def stop(self) -> None:
-        """Stop the simulator and close all interfaces."""
+        """Stop the simulator and close all interfaces.
+
+        Closes CAN, GPIO, DAC, and ADC interfaces. Safe to call multiple
+        times or on an already stopped simulator.
+        """
         if not self._running:
             return
 
@@ -264,7 +332,9 @@ class UutSimulator:
     async def run(self) -> None:
         """Run the simulator with async CAN receive loop and heartbeat.
 
-        This method blocks until stop() is called.
+        Starts the CAN receive loop and heartbeat transmission (if enabled),
+        then blocks until stop() is called. This is the main async entry point
+        for running the simulator.
         """
         if self._can is not None and self._can.is_open:
             await self._can.start_receiving()
@@ -355,7 +425,14 @@ class UutSimulator:
         return self._can_echo
 
     def _on_can_message(self, message: CanMessage) -> None:
-        """Handle received CAN message."""
+        """Handle received CAN message.
+
+        Stores the message in the receive buffer and echoes it back if echo
+        mode is enabled and the message ID matches the filter (if set).
+
+        Args:
+            message: The received CAN message.
+        """
         # Store message
         self._can_rx_messages.append(message)
         if len(self._can_rx_messages) > self._can_rx_max:
@@ -389,7 +466,11 @@ class UutSimulator:
         return self._can_heartbeat
 
     async def _start_heartbeat(self) -> None:
-        """Start the heartbeat background task."""
+        """Start the heartbeat background task.
+
+        Creates an async task that periodically sends heartbeat messages
+        at the configured interval. No-op if already running.
+        """
         if self._heartbeat_task is not None:
             return
 
@@ -402,7 +483,11 @@ class UutSimulator:
         )
 
     async def _stop_heartbeat(self) -> None:
-        """Stop the heartbeat background task."""
+        """Stop the heartbeat background task.
+
+        Cancels the heartbeat task and waits for it to complete.
+        Safe to call if heartbeat is not running.
+        """
         self._can_heartbeat.running = False
 
         if self._heartbeat_task is not None:
@@ -415,7 +500,11 @@ class UutSimulator:
             logger.info("CAN heartbeat stopped")
 
     async def _heartbeat_loop(self) -> None:
-        """Background task for sending heartbeat messages."""
+        """Background task for sending heartbeat messages.
+
+        Sends a heartbeat message with an 8-byte counter (big-endian) at
+        the configured interval. Runs until _stop_heartbeat() is called.
+        """
         interval_sec = self._can_heartbeat.interval_ms / 1000.0
 
         while self._can_heartbeat.running:

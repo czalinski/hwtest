@@ -1,12 +1,22 @@
 """MCP23017 I2C GPIO expander driver.
 
-The MCP23017 is a 16-bit I/O expander with I2C interface:
+This module provides a driver for the MCP23017 16-bit I/O expander with I2C
+interface. The MCP23017 features:
+
 - 16 GPIO pins organized as two 8-bit ports (A and B)
 - Each pin individually configurable as input or output
-- Internal pull-up resistors (100kΩ)
-- Interrupt-on-change capability
+- Internal pull-up resistors (100k ohm)
+- Interrupt-on-change capability (not implemented in this driver)
 
 Default I2C address is 0x20, configurable via A0-A2 pins (0x20-0x27).
+
+Example:
+    >>> gpio = Mcp23017(Mcp23017Config(i2c_bus=1, address=0x20))
+    >>> gpio.open()
+    >>> gpio.set_pin_direction(0, PinDirection.OUTPUT)
+    >>> gpio.write_pin(0, True)
+    >>> value = gpio.read_pin(1)
+    >>> gpio.close()
 """
 
 from __future__ import annotations
@@ -17,7 +27,11 @@ from typing import Any
 
 
 class Mcp23017Register(IntEnum):
-    """MCP23017 register addresses (IOCON.BANK=0 mode)."""
+    """MCP23017 register addresses in IOCON.BANK=0 mode.
+
+    Register layout when BANK bit is 0 (default). Registers are paired
+    for Port A and Port B operations.
+    """
 
     IODIRA = 0x00  # I/O direction port A (1=input, 0=output)
     IODIRB = 0x01  # I/O direction port B
@@ -43,7 +57,12 @@ class Mcp23017Register(IntEnum):
 
 
 class PinDirection(IntEnum):
-    """Pin direction constants."""
+    """Pin direction constants for GPIO configuration.
+
+    Attributes:
+        OUTPUT: Configure pin as output (value 0).
+        INPUT: Configure pin as input (value 1).
+    """
 
     OUTPUT = 0
     INPUT = 1
@@ -53,16 +72,25 @@ class PinDirection(IntEnum):
 class Mcp23017Config:
     """Configuration for the MCP23017 GPIO expander.
 
-    Args:
+    Immutable configuration specifying the I2C bus and device address.
+
+    Attributes:
         i2c_bus: I2C bus number (typically 1 on Raspberry Pi).
-        address: I2C address (0x20-0x27, default 0x20).
+        address: I2C address (0x20-0x27, configurable via A0-A2 pins).
+
+    Raises:
+        ValueError: If address is not in valid range 0x20-0x27.
     """
 
     i2c_bus: int = 1
     address: int = 0x20
 
     def __post_init__(self) -> None:
-        """Validate configuration."""
+        """Validate configuration parameters.
+
+        Raises:
+            ValueError: If address is not in valid range 0x20-0x27.
+        """
         if not 0x20 <= self.address <= 0x27:
             raise ValueError(f"address must be 0x20-0x27, got {hex(self.address)}")
 
@@ -73,9 +101,19 @@ class Mcp23017:
     Provides access to 16 GPIO pins organized as two 8-bit ports (A and B).
     Pins are numbered 0-15, where 0-7 are port A and 8-15 are port B.
 
-    Args:
-        config: Device configuration.
-        bus: Optional I2C bus object (for testing). If None, uses smbus2.
+    The device must be opened before use and should be closed when done to
+    release I2C bus resources.
+
+    Attributes:
+        config: The device configuration (read-only).
+        is_open: True if the device is currently open.
+
+    Example:
+        >>> gpio = Mcp23017(Mcp23017Config(i2c_bus=1, address=0x20))
+        >>> gpio.open()
+        >>> gpio.set_pin_direction(0, PinDirection.OUTPUT)
+        >>> gpio.write_pin(0, True)
+        >>> gpio.close()
     """
 
     def __init__(
@@ -83,6 +121,12 @@ class Mcp23017:
         config: Mcp23017Config | None = None,
         bus: Any | None = None,
     ) -> None:
+        """Initialize the MCP23017 driver.
+
+        Args:
+            config: Device configuration. Uses defaults if None.
+            bus: Optional pre-configured I2C bus object for testing/mocking.
+        """
         self._config = config or Mcp23017Config()
         self._bus = bus
         self._opened = False
@@ -134,7 +178,11 @@ class Mcp23017:
         self._write_register(Mcp23017Register.OLATB, 0x00)
 
     def close(self) -> None:
-        """Close the I2C bus."""
+        """Close the I2C bus and release resources.
+
+        Resets all output pins to low before closing. Safe to call multiple
+        times or on an already closed device.
+        """
         if not self._opened:
             return
 
@@ -154,12 +202,24 @@ class Mcp23017:
         self._opened = False
 
     def _write_register(self, register: int, value: int) -> None:
-        """Write a value to a register."""
+        """Write a value to a device register.
+
+        Args:
+            register: Register address to write to.
+            value: 8-bit value to write.
+        """
         assert self._bus is not None
         self._bus.write_byte_data(self._config.address, register, value)
 
     def _read_register(self, register: int) -> int:
-        """Read a value from a register."""
+        """Read a value from a device register.
+
+        Args:
+            register: Register address to read from.
+
+        Returns:
+            8-bit register value.
+        """
         assert self._bus is not None
         result: int = self._bus.read_byte_data(self._config.address, register)
         return result

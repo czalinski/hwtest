@@ -48,7 +48,20 @@ if TYPE_CHECKING:
 
 
 class Ads1256Gain(IntEnum):
-    """Programmable gain amplifier settings."""
+    """Programmable gain amplifier (PGA) settings for the ADS1256.
+
+    The gain setting determines the input voltage range. With a 2.5V
+    reference voltage, the input ranges are as shown below.
+
+    Attributes:
+        GAIN_1: Unity gain, +/-5V input range.
+        GAIN_2: 2x gain, +/-2.5V input range.
+        GAIN_4: 4x gain, +/-1.25V input range.
+        GAIN_8: 8x gain, +/-625mV input range.
+        GAIN_16: 16x gain, +/-312.5mV input range.
+        GAIN_32: 32x gain, +/-156.25mV input range.
+        GAIN_64: 64x gain, +/-78.125mV input range.
+    """
 
     GAIN_1 = 0b000  # ±5V input range (with 2.5V reference)
     GAIN_2 = 0b001  # ±2.5V
@@ -60,7 +73,15 @@ class Ads1256Gain(IntEnum):
 
 
 class Ads1256DataRate(IntEnum):
-    """Data rate settings (samples per second)."""
+    """Data rate settings (samples per second) for the ADS1256.
+
+    Higher data rates provide faster sampling but lower resolution due to
+    reduced oversampling. For high-precision measurements, use lower rates.
+
+    Note:
+        The actual rate when scanning multiple channels will be lower than
+        the configured rate because each channel switch requires settling time.
+    """
 
     SPS_30000 = 0xF0
     SPS_15000 = 0xE0
@@ -80,7 +101,7 @@ class Ads1256DataRate(IntEnum):
     SPS_2_5 = 0x03
 
 
-# Convert data rate enum to actual SPS values
+#: Mapping from data rate enum values to actual samples per second.
 DATA_RATE_VALUES: dict[Ads1256DataRate, float] = {
     Ads1256DataRate.SPS_30000: 30000.0,
     Ads1256DataRate.SPS_15000: 15000.0,
@@ -102,45 +123,54 @@ DATA_RATE_VALUES: dict[Ads1256DataRate, float] = {
 
 
 class _Ads1256Cmd:
-    """ADS1256 SPI commands."""
+    """ADS1256 SPI command bytes.
 
-    WAKEUP = 0x00
-    RDATA = 0x01
-    RDATAC = 0x03
-    SDATAC = 0x0F
-    RREG = 0x10
-    WREG = 0x50
-    SELFCAL = 0xF0
-    SELFOCAL = 0xF1
-    SELFGCAL = 0xF2
-    SYSOCAL = 0xF3
-    SYSGCAL = 0xF4
-    SYNC = 0xFC
-    STANDBY = 0xFD
-    RESET = 0xFE
+    These are the command bytes sent over SPI to control the ADS1256.
+    Most commands are single-byte; register read/write commands are
+    followed by additional bytes specifying the register address and count.
+    """
+
+    WAKEUP = 0x00    # Exit standby mode
+    RDATA = 0x01     # Read single conversion result
+    RDATAC = 0x03    # Read data continuously
+    SDATAC = 0x0F    # Stop continuous read mode
+    RREG = 0x10      # Read register (OR with register address)
+    WREG = 0x50      # Write register (OR with register address)
+    SELFCAL = 0xF0   # Self-offset and gain calibration
+    SELFOCAL = 0xF1  # Self-offset calibration
+    SELFGCAL = 0xF2  # Self-gain calibration
+    SYSOCAL = 0xF3   # System offset calibration
+    SYSGCAL = 0xF4   # System gain calibration
+    SYNC = 0xFC      # Synchronize A/D conversion
+    STANDBY = 0xFD   # Enter standby mode
+    RESET = 0xFE     # Reset to power-up values
 
 
 class _Ads1256Reg:
-    """ADS1256 register addresses."""
+    """ADS1256 register addresses.
 
-    STATUS = 0x00
-    MUX = 0x01
-    ADCON = 0x02
-    DRATE = 0x03
-    IO = 0x04
-    OFC0 = 0x05
-    OFC1 = 0x06
-    OFC2 = 0x07
-    FSC0 = 0x08
-    FSC1 = 0x09
-    FSC2 = 0x0A
+    These are the internal register addresses for configuring and
+    reading status from the ADS1256.
+    """
+
+    STATUS = 0x00  # Status register (read-only chip ID, DRDY, buffer)
+    MUX = 0x01     # Input multiplexer control
+    ADCON = 0x02   # A/D control (clock, gain)
+    DRATE = 0x03   # Data rate control
+    IO = 0x04      # GPIO direction and state
+    OFC0 = 0x05    # Offset calibration byte 0
+    OFC1 = 0x06    # Offset calibration byte 1
+    OFC2 = 0x07    # Offset calibration byte 2
+    FSC0 = 0x08    # Full-scale calibration byte 0
+    FSC1 = 0x09    # Full-scale calibration byte 1
+    FSC2 = 0x0A    # Full-scale calibration byte 2
 
 
-# Default GPIO pins for Waveshare board
-_DEFAULT_CS_PIN = 22
-_DEFAULT_DRDY_PIN = 17
-_DEFAULT_RESET_PIN = 18
-_DEFAULT_PDWN_PIN = 27
+# Default GPIO pins for Waveshare High-Precision AD/DA board
+_DEFAULT_CS_PIN = 22      # Chip select (directly controlled, not SPI CE)
+_DEFAULT_DRDY_PIN = 17    # Data ready (active low)
+_DEFAULT_RESET_PIN = 18   # Hardware reset (active low)
+_DEFAULT_PDWN_PIN = 27    # Power down (active low, normally high)
 
 
 @dataclass(frozen=True)
@@ -186,6 +216,13 @@ class Ads1256:
         spi: Any | None = None,
         gpio: Any | None = None,
     ) -> None:
+        """Initialize the ADS1256 driver.
+
+        Args:
+            config: ADC configuration. If None, uses default configuration.
+            spi: Optional SPI device for testing. If None, uses spidev.
+            gpio: Optional GPIO interface for testing. If None, uses lgpio.
+        """
         self._config = config or Ads1256Config()
         self._spi = spi
         self._gpio = gpio
@@ -193,17 +230,29 @@ class Ads1256:
 
     @property
     def config(self) -> Ads1256Config:
-        """Return the ADC configuration."""
+        """The ADC configuration.
+
+        Returns:
+            Frozen configuration dataclass.
+        """
         return self._config
 
     @property
     def is_open(self) -> bool:
-        """Return True if the device is open."""
+        """Whether the device is open and ready for operations.
+
+        Returns:
+            True if open() has been called successfully.
+        """
         return self._opened
 
     @property
     def sample_rate(self) -> float:
-        """Return the configured sample rate in Hz."""
+        """The configured sample rate in samples per second.
+
+        Returns:
+            Sample rate in Hz.
+        """
         return DATA_RATE_VALUES[self._config.data_rate]
 
     def open(self) -> None:
@@ -252,7 +301,10 @@ class Ads1256:
         self._configure()
 
     def close(self) -> None:
-        """Close the SPI device and release GPIO."""
+        """Close the SPI device and release GPIO resources.
+
+        Safe to call multiple times. Errors during cleanup are silently ignored.
+        """
         if not self._opened:
             return
 
@@ -271,12 +323,12 @@ class Ads1256:
         self._opened = False
 
     def _cs_low(self) -> None:
-        """Assert chip select (active low)."""
+        """Assert chip select (drive low to select device)."""
         assert self._gpio is not None
         self._gpio.output(self._config.cs_pin, LOW)
 
     def _cs_high(self) -> None:
-        """Deassert chip select."""
+        """Deassert chip select (drive high to deselect device)."""
         assert self._gpio is not None
         self._gpio.output(self._config.cs_pin, HIGH)
 
@@ -298,7 +350,11 @@ class Ads1256:
         return False
 
     def _write_cmd(self, cmd: int) -> None:
-        """Write a single command byte."""
+        """Write a single command byte to the ADC.
+
+        Args:
+            cmd: Command byte from _Ads1256Cmd.
+        """
         assert self._spi is not None
         self._spi.writebytes([cmd])
 
@@ -334,7 +390,11 @@ class Ads1256:
         self._cs_high()
 
     def _reset(self) -> None:
-        """Reset the ADS1256."""
+        """Reset the ADS1256 to power-on defaults.
+
+        Uses hardware reset if reset_pin is configured, otherwise
+        sends the software reset command.
+        """
         assert self._gpio is not None
         if self._config.reset_pin is not None:
             # Hardware reset
@@ -352,7 +412,11 @@ class Ads1256:
         self._wait_drdy()
 
     def _configure(self) -> None:
-        """Configure the ADS1256 with current settings."""
+        """Configure the ADS1256 with the settings from config.
+
+        Sets up the STATUS, MUX, ADCON, and DRATE registers, then
+        performs a self-calibration.
+        """
         # Stop continuous read mode if active
         self._cs_low()
         self._write_cmd(_Ads1256Cmd.SDATAC)

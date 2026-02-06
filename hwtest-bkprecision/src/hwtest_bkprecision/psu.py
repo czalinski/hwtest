@@ -13,6 +13,13 @@ from hwtest_scpi import ScpiConnection, VisaResource
 class BkDcPsu:
     """High-level driver for BK Precision DC power supplies.
 
+    Provides typed methods for controlling BK Precision 9100 series DC power
+    supplies via SCPI commands. Supports both single-channel (9115) and
+    multi-channel (9130B) models.
+
+    Attributes:
+        _conn: The underlying SCPI connection.
+
     Args:
         connection: An open ``ScpiConnection`` to the instrument.
     """
@@ -23,7 +30,11 @@ class BkDcPsu:
     # -- Identity / lifecycle -----------------------------------------------
 
     def identify(self) -> str:
-        """Query instrument identification string (``*IDN?``)."""
+        """Query instrument identification string (``*IDN?``).
+
+        Returns:
+            Raw identification string from the instrument.
+        """
         return self._conn.identify()
 
     def get_identity(self) -> InstrumentIdentity:
@@ -53,11 +64,19 @@ class BkDcPsu:
         self._conn.command(f"VOLT {voltage}")
 
     def get_voltage(self) -> float:
-        """Query the output voltage setpoint."""
+        """Query the output voltage setpoint.
+
+        Returns:
+            Voltage setpoint in volts.
+        """
         return self._conn.query_number("VOLT?")
 
     def measure_voltage(self) -> float:
-        """Measure the actual output voltage."""
+        """Measure the actual output voltage.
+
+        Returns:
+            Measured voltage in volts.
+        """
         return self._conn.query_number("MEAS:VOLT?")
 
     # -- Current ------------------------------------------------------------
@@ -71,31 +90,53 @@ class BkDcPsu:
         self._conn.command(f"CURR {current}")
 
     def get_current(self) -> float:
-        """Query the output current limit."""
+        """Query the output current limit.
+
+        Returns:
+            Current limit in amps.
+        """
         return self._conn.query_number("CURR?")
 
     def measure_current(self) -> float:
-        """Measure the actual output current."""
+        """Measure the actual output current.
+
+        Returns:
+            Measured current in amps.
+        """
         return self._conn.query_number("MEAS:CURR?")
 
     # -- Power --------------------------------------------------------------
 
     def measure_power(self) -> float:
-        """Measure the actual output power."""
+        """Measure the actual output power.
+
+        Returns:
+            Measured power in watts.
+        """
         return self._conn.query_number("MEAS:POW?")
 
     # -- Output -------------------------------------------------------------
 
     def enable_output(self) -> None:
-        """Enable the output."""
+        """Enable the output.
+
+        Turns on the power supply output for the currently selected channel.
+        """
         self._conn.command("OUTP ON")
 
     def disable_output(self) -> None:
-        """Disable the output."""
+        """Disable the output.
+
+        Turns off the power supply output for the currently selected channel.
+        """
         self._conn.command("OUTP OFF")
 
     def is_output_enabled(self) -> bool:
-        """Query whether the output is enabled."""
+        """Query whether the output is enabled.
+
+        Returns:
+            True if output is enabled, False otherwise.
+        """
         return self._conn.query_bool("OUTP?")
 
     # -- OVP ----------------------------------------------------------------
@@ -109,7 +150,11 @@ class BkDcPsu:
         self._conn.command(f"VOLT:PROT {voltage}")
 
     def get_ovp(self) -> float:
-        """Query the over-voltage protection level."""
+        """Query the over-voltage protection level.
+
+        Returns:
+            OVP threshold in volts.
+        """
         return self._conn.query_number("VOLT:PROT?")
 
     # -- Channel selection (multi-channel) ----------------------------------
@@ -123,7 +168,11 @@ class BkDcPsu:
         self._conn.command(f"INST:NSEL {channel}")
 
     def get_selected_channel(self) -> int:
-        """Query the currently selected channel number."""
+        """Query the currently selected channel number.
+
+        Returns:
+            Currently selected channel number (1-based).
+        """
         return self._conn.query_int("INST:NSEL?")
 
     # -- Apply (multi-channel convenience) ----------------------------------

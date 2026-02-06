@@ -1,4 +1,19 @@
-"""Interface definitions for hwtest."""
+"""Protocol-based interface definitions for hwtest.
+
+This package defines abstract interfaces (using typing.Protocol) for the
+major components of the hwtest framework. These interfaces enable loose
+coupling between components and allow for multiple implementations.
+
+Interface Categories:
+    Telemetry: TelemetryPublisher, TelemetrySubscriber - JSON telemetry pub/sub
+    Streaming: StreamPublisher, StreamSubscriber - Binary streaming pub/sub
+    State: StatePublisher, StateSubscriber - Environmental state management
+    Monitor: Monitor, ThresholdProvider - Threshold evaluation
+    Logger: Logger, StreamLogger - Data persistence
+
+All interfaces are designed for async operation and support the async
+context manager protocol where appropriate.
+"""
 
 from hwtest_core.interfaces.logger import (
     Logger,

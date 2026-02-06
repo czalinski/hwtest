@@ -1,4 +1,25 @@
-"""SCPI protocol and PyVISA transport for hwtest."""
+"""SCPI protocol library for hwtest instrument automation.
+
+This package provides SCPI (Standard Commands for Programmable Instruments)
+communication infrastructure for hardware test automation. It includes:
+
+- Transport abstraction for SCPI message passing
+- PyVISA-backed transport for real instruments
+- High-level connection with automatic error checking
+- Number parsing and formatting utilities for SCPI responses
+- Custom exception types for SCPI protocol errors
+
+Typical usage::
+
+    from hwtest_scpi import VisaResource, ScpiConnection
+
+    transport = VisaResource("TCPIP::192.168.1.100::INSTR")
+    transport.open()
+    conn = ScpiConnection(transport)
+    identity = conn.get_identity()
+    print(f"Connected to {identity.manufacturer} {identity.model}")
+    conn.close()
+"""
 
 from hwtest_scpi.connection import ScpiConnection, parse_idn_response
 from hwtest_scpi.errors import ScpiCommandError, ScpiError, ScpiInstrumentError

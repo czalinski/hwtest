@@ -1,4 +1,26 @@
-"""SCPI connection with automatic error checking."""
+"""SCPI connection with automatic error checking.
+
+This module provides the :class:`ScpiConnection` class, which wraps a
+transport layer to provide high-level SCPI operations with automatic error
+queue checking, typed query methods, and IEEE 488.2 common commands.
+
+Typical usage::
+
+    from hwtest_scpi import VisaResource, ScpiConnection
+
+    transport = VisaResource("TCPIP::192.168.1.100::INSTR")
+    transport.open()
+    conn = ScpiConnection(transport)
+
+    # Get instrument identity
+    identity = conn.get_identity()
+
+    # Send commands and queries
+    conn.command("CONF:VOLT:DC 10")
+    voltage = conn.query_number("MEAS:VOLT:DC?")
+
+    conn.close()
+"""
 
 from __future__ import annotations
 
@@ -57,14 +79,33 @@ class ScpiConnection:
     Provides command/query methods with automatic ``SYST:ERR?`` checking,
     typed query variants, and common IEEE 488.2 convenience methods.
 
+    The connection performs automatic error checking by default: after each
+    command or query, it drains the instrument's error queue via ``SYST:ERR?``
+    and raises :class:`ScpiCommandError` if errors are present.
+
+    Attributes:
+        check_errors: Whether automatic error checking is enabled.
+
     Args:
         transport: An open :class:`ScpiTransport` instance.
         check_errors: If True (default), every command and query is followed
-            by draining the instrument error queue.  Errors raise
+            by draining the instrument error queue. Errors raise
             :class:`ScpiCommandError`.
+
+    Example:
+        >>> conn = ScpiConnection(transport)
+        >>> conn.reset()  # Send *RST
+        >>> voltage = conn.query_number("MEAS:VOLT:DC?")
+        >>> print(f"Measured: {voltage} V")
     """
 
     def __init__(self, transport: ScpiTransport, *, check_errors: bool = True) -> None:
+        """Initialize the SCPI connection.
+
+        Args:
+            transport: An open transport implementing :class:`ScpiTransport`.
+            check_errors: Enable automatic error queue checking. Defaults to True.
+        """
         self._transport = transport
         self._check_errors = check_errors
 
@@ -106,12 +147,18 @@ class ScpiConnection:
     def query_number(self, cmd: str, *, check: bool | None = None) -> float:
         """Query and parse the response as a SCPI number.
 
+        Parses NR1, NR2, NR3 formats and special values (NAN, INF, NINF).
+
         Args:
             cmd: The SCPI query string.
             check: Override the instance-level error check setting.
 
         Returns:
             The parsed float value.
+
+        Raises:
+            ValueError: If the response cannot be parsed as a number.
+            ScpiCommandError: If the instrument reports errors.
         """
         return parse_number(self.query(cmd, check=check))
 
@@ -124,6 +171,10 @@ class ScpiConnection:
 
         Returns:
             A tuple of parsed float values.
+
+        Raises:
+            ValueError: If any element cannot be parsed as a number.
+            ScpiCommandError: If the instrument reports errors.
         """
         return parse_numbers(self.query(cmd, check=check))
 
@@ -136,11 +187,17 @@ class ScpiConnection:
 
         Returns:
             The parsed integer value.
+
+        Raises:
+            ValueError: If the response is not a valid integer.
+            ScpiCommandError: If the instrument reports errors.
         """
         return parse_int(self.query(cmd, check=check))
 
     def query_bool(self, cmd: str, *, check: bool | None = None) -> bool:
         """Query and parse the response as a boolean.
+
+        Accepts ``"1"``/``"0"`` and ``"ON"``/``"OFF"`` (case-insensitive).
 
         Args:
             cmd: The SCPI query string.
@@ -148,13 +205,22 @@ class ScpiConnection:
 
         Returns:
             The parsed boolean value.
+
+        Raises:
+            ValueError: If the response is not a recognized boolean token.
+            ScpiCommandError: If the instrument reports errors.
         """
         return parse_bool(self.query(cmd, check=check))
 
     # -- IEEE 488.2 convenience methods --------------------------------------
 
     def identify(self) -> str:
-        """Query the instrument identification string (``*IDN?``)."""
+        """Query the instrument identification string (``*IDN?``).
+
+        Returns:
+            Raw identification string in the format:
+            ``manufacturer,model,serial,firmware``.
+        """
         return self.query("*IDN?")
 
     def get_identity(self) -> InstrumentIdentity:
@@ -167,11 +233,17 @@ class ScpiConnection:
         return parse_idn_response(self.identify())
 
     def reset(self) -> None:
-        """Send a reset command (``*RST``)."""
+        """Send a reset command (``*RST``).
+
+        Resets the instrument to its power-on default state.
+        """
         self.command("*RST")
 
     def clear_status(self) -> None:
-        """Clear the status registers (``*CLS``)."""
+        """Clear the status registers (``*CLS``).
+
+        Clears the error queue, status registers, and any pending triggers.
+        """
         self.command("*CLS")
 
     def wait_complete(self) -> None:
