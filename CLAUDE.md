@@ -625,3 +625,140 @@ hwtest-rack configs/orange_pi_5_rack.yaml --port 8000
 - Google-style docstrings for public APIs
 - Tests mirror source structure in `tests/unit/`
 - Minimal external dependencies (core library is stdlib-only)
+
+## Testing Philosophy
+
+### Prefer Integration Tests and Simulators Over Mocking
+
+This project prioritizes **real hardware testing** and **behavioral simulators** over unit tests with mocks. The testing hierarchy (in order of preference):
+
+1. **Integration tests with real hardware** - Tests that exercise actual instruments and communication paths
+2. **Integration tests with simulators** - Tests using in-process or networked simulators that faithfully replicate hardware behavior
+3. **Unit tests without mocks** - Pure logic tests for data types, algorithms, and transformations
+4. **Unit tests with mocks** - Only when hardware dependencies make other approaches impractical
+
+**Why minimize mocking:**
+- Mocks test the test, not the code - they verify you called methods correctly, not that the system works
+- Mocks hide integration bugs that only surface with real hardware timing and state
+- Mock-heavy tests are brittle and require maintenance when implementations change
+- Hardware behavior is subtle - simulators capture edge cases that mocks miss
+
+**When mocking is acceptable:**
+- Testing error handling paths that are hard to trigger with real hardware
+- Isolating a specific component during initial development
+- Testing timeout and retry logic
+
+### Code Coverage with Mock Detection
+
+The project includes tooling to track which code is covered only by mocked tests, helping identify candidates for better test coverage.
+
+**Run coverage analysis:**
+```bash
+# Full coverage across all packages
+python scripts/run_coverage.py
+
+# Specific package(s)
+python scripts/run_coverage.py -p hwtest-core -p hwtest-uut
+
+# With mock analysis report
+python scripts/run_coverage.py --analyze-mocks
+
+# Open HTML report in browser
+python scripts/run_coverage.py --open
+```
+
+**Coverage reports generated:**
+- `coverage/html/index.html` - Interactive line-by-line coverage report with context showing which tests covered each line
+- `coverage/mock_analysis.html` - Report highlighting lines covered only by mocked tests
+- `coverage/coverage.json` - JSON data for programmatic analysis
+
+**Mock detection:**
+The test framework automatically detects tests that use mocking by analyzing:
+- Imports from `unittest.mock` (MagicMock, patch, Mock, etc.)
+- Use of pytest-mock's `mocker` fixture
+- Function parameters containing "mock" in the name
+- Test function names containing "mock", "fake", or "stub"
+
+Tests using mocks are automatically marked with `@pytest.mark.uses_mock`.
+
+**Interpreting the mock analysis:**
+```
+Files with significant mock-only coverage (candidates for integration tests):
+  simulator.py: 89 lines mock-only (203/323 covered)
+  mcp23017.py: 47 lines mock-only (161/193 covered)
+```
+
+These files have code paths exercised only through mocked tests. Consider:
+- Adding integration tests with real hardware
+- Building a behavioral simulator (like `BkDcPsuEmulator`)
+- Using the UUT simulator for end-to-end testing
+
+### Test Organization
+
+```
+hwtest-<package>/
+├── src/
+│   └── hwtest_<package>/
+│       └── module.py
+└── tests/
+    ├── unit/           # Fast tests, no hardware required
+    │   └── test_module.py
+    └── integration/    # Requires hardware or simulators
+        └── test_module_integration.py
+```
+
+**Unit tests** (`tests/unit/`):
+- Run without hardware: `pytest tests/unit/`
+- Should complete in seconds
+- Use simulators or minimal mocking when hardware interfaces are unavoidable
+
+**Integration tests** (`tests/integration/`):
+- Require hardware or external services
+- Marked with `@pytest.mark.integration`
+- Run with: `pytest tests/integration/ -m integration`
+- Set environment variables for hardware addresses (e.g., `UUT_URL`)
+
+### Building Simulators
+
+When hardware isn't available, build behavioral simulators rather than using mocks. Examples in this codebase:
+
+**SCPI Instrument Emulator** (`hwtest-bkprecision/emulator.py`):
+```python
+class BkDcPsuEmulator:
+    """In-process emulator implementing ScpiTransport protocol."""
+
+    def __init__(self) -> None:
+        self._voltage = 0.0
+        self._current = 0.0
+        self._output_on = False
+
+    def write(self, command: str) -> None:
+        # Parse and execute SCPI commands, updating internal state
+        ...
+
+    def read(self) -> str:
+        # Return queued responses from previous queries
+        ...
+```
+
+**UUT Simulator** (`hwtest-uut/simulator.py`):
+- Full REST API simulating a Unit Under Test
+- Supports ADC/DAC/GPIO/CAN interfaces
+- Can inject failures for stress testing
+- Runs as a standalone service on a Raspberry Pi
+
+**Benefits of simulators over mocks:**
+- Reusable across many tests
+- Can be run as external services for manual testing
+- Capture real protocol behavior (timing, state machines, error conditions)
+- Tests remain valid when implementation details change
+
+### Coverage Targets
+
+The project aims for meaningful coverage, not arbitrary percentages:
+
+- **Core types and interfaces**: High coverage through unit tests (these have no hardware dependencies)
+- **Instrument drivers**: Coverage through integration tests with real hardware or simulators
+- **Protocol implementations**: Coverage through behavioral tests, not mock verification
+
+Focus on reducing "mock-only coverage" rather than increasing raw coverage numbers. A line covered by an integration test is worth more than the same line covered only by a mocked unit test.
