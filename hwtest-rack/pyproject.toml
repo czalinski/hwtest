@@ -40,7 +40,8 @@ dev = [
 ]
 
 [project.scripts]
-hwtest-rack = "hwtest_rack.server:main"
+hwtest-rack = "hwtest_rack.cli:main"
+hwtest-rack-server = "hwtest_rack.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -10,8 +10,13 @@ Configuration:
     Test parameters (states, thresholds, timing) are loaded from:
         configs/voltage_echo_monitor.yaml
 
-    Hardware configuration (channels, calibration) is loaded from:
+    Rack class configuration (instruments, channels) is loaded from:
         src/hwtest_intg/configs/pi5_mcc_intg_a_rack.yaml
+
+    Rack instance calibration (per-unit scale factors) is loaded from:
+        ~/.config/hwtest/racks/pi5_mcc_intg_a_<serial>.yaml
+
+    Run 'hwtest-rack calibrate --serial <serial>' to calibrate a rack.
 
 Hardware Wiring:
     MCC 152 Analog Out 0 → UUT ADS1256 Channel 0
@@ -23,7 +28,9 @@ Environment Variables:
     MCC118_ADDRESS: MCC 118 HAT address (default: 4)
     TEST_MODE: Test mode - 'functional', 'halt', or 'hass' (default: functional)
     TEST_DEFINITION_PATH: Additional paths to search for definition files
-    RACK_CONFIG: Override path to rack configuration file
+    RACK_CONFIG: Override path to rack class configuration file
+    RACK_SERIAL: Rack instance serial number for calibration lookup
+    HWTEST_RACK_INSTANCE_PATH: Additional paths to search for rack instance configs
     TELEMETRY_ENABLED: Enable InfluxDB telemetry logging (default: 0)
     INFLUXDB_URL: InfluxDB URL (default: http://localhost:8086)
     INFLUXDB_ORG: InfluxDB organization (default: hwtest)
@@ -66,6 +73,7 @@ from hwtest_core.types.streaming import StreamData, StreamField, StreamSchema
 from hwtest_core.types.threshold import BoundType, StateThresholds, Threshold, ThresholdBound
 from hwtest_testcase import TestDefinition, StateDef, load_definition
 from hwtest_rack.config import RackConfig, load_config as load_rack_config
+from hwtest_rack.instance import RackInstanceConfig, load_instance_config
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +113,7 @@ def get_test_definition() -> TestDefinition:
 # This allows the YAML to be the single source of truth
 _definition: TestDefinition | None = None
 _rack_config: RackConfig | None = None
+_rack_instance: RackInstanceConfig | None = None
 
 
 def _get_definition() -> TestDefinition:
@@ -173,6 +182,57 @@ def _get_rack_config() -> RackConfig:
         logger.info(f"Loaded rack config from: {rack_path}")
 
     return _rack_config
+
+
+def _get_rack_instance() -> RackInstanceConfig:
+    """Get cached rack instance configuration.
+
+    Loads the rack instance config for calibration data.
+    Uses RACK_SERIAL environment variable or finds first matching instance.
+    """
+    global _rack_instance
+    if _rack_instance is None:
+        definition = _get_definition()
+        rack_id = definition.rack_id
+
+        if rack_id is None:
+            raise ValueError("Test definition does not specify a rack reference")
+
+        # Remove "_rack" suffix if present for instance lookup
+        rack_class = rack_id.replace("_rack", "")
+
+        serial = os.environ.get("RACK_SERIAL")
+
+        try:
+            _rack_instance = load_instance_config(rack_class, serial)
+            logger.info(
+                f"Loaded rack instance: {_rack_instance.instance.rack_class} "
+                f"#{_rack_instance.instance.serial_number} from {_rack_instance.source_path}"
+            )
+        except FileNotFoundError:
+            # Fall back to default calibration values
+            logger.warning(
+                f"Rack instance config not found for class '{rack_class}'"
+                + (f" serial '{serial}'" if serial else "")
+                + ". Using default calibration values."
+            )
+            from hwtest_rack.instance import RackInstanceInfo, CalibrationMetadata
+            _rack_instance = RackInstanceConfig(
+                instance=RackInstanceInfo(
+                    serial_number="default",
+                    rack_class=rack_class,
+                    description="Default instance (no calibration file found)",
+                ),
+                calibration={
+                    "uut_adc_scale_factor": 2.0,
+                    "mcc118_scale_factor": 1.0,
+                },
+                metadata=CalibrationMetadata(
+                    notes="Using default values - run 'hwtest-rack calibrate' to calibrate",
+                ),
+            )
+
+    return _rack_instance
 
 
 # =============================================================================
@@ -545,6 +605,12 @@ def rack_config() -> RackConfig:
 
 
 @pytest.fixture
+def rack_instance() -> RackInstanceConfig:
+    """Provide the rack instance configuration with calibration data."""
+    return _get_rack_instance()
+
+
+@pytest.fixture
 def mcc152_dac() -> Generator[Any, None, None]:
     """Provide an MCC 152 HAT for DAC output."""
     try:
@@ -702,7 +768,7 @@ class TestVoltageEchoMonitor:
         mcc118_adc: Any,
         state: EnvironmentalState,
         definition: TestDefinition,
-        rack_config: RackConfig,
+        rack_instance: RackInstanceConfig,
     ) -> VoltageReadings:
         """Run one echo cycle for a given state.
 
@@ -710,8 +776,8 @@ class TestVoltageEchoMonitor:
         """
         target_voltage = state.metadata.get("target_voltage", 0.0)
         settling_time = definition.parameters.settling_time_seconds
-        uut_adc_scale = rack_config.calibration.get("uut_adc_scale_factor", 1.0)
-        mcc118_scale = rack_config.calibration.get("mcc118_scale_factor", 1.0)
+        uut_adc_scale = rack_instance.get_calibration("uut_adc_scale_factor", 1.0)
+        mcc118_scale = rack_instance.get_calibration("mcc118_scale_factor", 1.0)
 
         # Step 1: Set output voltage on rack DAC
         mcc152_dac.a_out_write(0, target_voltage)
@@ -775,7 +841,7 @@ class TestVoltageEchoMonitor:
         monitor: VoltageEchoMonitor,
         states: list[EnvironmentalState],
         definition: TestDefinition,
-        rack_config: RackConfig,
+        rack_instance: RackInstanceConfig,
         stats: RunStatistics,
         telemetry_logger: Any = None,
     ) -> MonitorResult | None:
@@ -801,7 +867,7 @@ class TestVoltageEchoMonitor:
 
             # Run echo cycle
             readings = await self._run_echo_cycle(
-                uut_client, mcc152_dac, mcc118_adc, state, definition, rack_config
+                uut_client, mcc152_dac, mcc118_adc, state, definition, rack_instance
             )
 
             # Log telemetry
@@ -835,7 +901,7 @@ class TestVoltageEchoMonitor:
         voltage_monitor: VoltageEchoMonitor,
         environmental_states: list[EnvironmentalState],
         test_definition: TestDefinition,
-        rack_config: RackConfig,
+        rack_instance: RackInstanceConfig,
         cancellation_token: CancellationToken,
         telemetry_logger: Any,
     ) -> None:
@@ -847,7 +913,7 @@ class TestVoltageEchoMonitor:
         - hass: Continuous until failure or cancelled
 
         Test parameters are loaded from configs/voltage_echo_monitor.yaml.
-        Hardware calibration is loaded from the rack configuration.
+        Hardware calibration is loaded from the rack instance configuration.
         """
         test_mode = get_execution_mode()
         stats = RunStatistics()
@@ -855,13 +921,16 @@ class TestVoltageEchoMonitor:
 
         logger.info(f"Starting voltage echo monitor test in {test_mode.value.upper()} mode")
         logger.info(f"Definition: {test_definition.source_path}")
-        logger.info(f"Rack: {rack_config.rack_id}")
+        logger.info(
+            f"Rack instance: {rack_instance.instance.rack_class} "
+            f"#{rack_instance.instance.serial_number}"
+        )
         logger.info(f"States: {[s.name for s in environmental_states]}")
         logger.info(f"Voltage tolerance: ±{tolerance}V")
         logger.info(f"Settling time: {test_definition.parameters.settling_time_seconds}s")
         logger.info(
-            f"Calibration: UUT ADC={rack_config.calibration.get('uut_adc_scale_factor', 1.0)}, "
-            f"MCC118={rack_config.calibration.get('mcc118_scale_factor', 1.0)}"
+            f"Calibration: UUT ADC={rack_instance.get_calibration('uut_adc_scale_factor', 1.0)}, "
+            f"MCC118={rack_instance.get_calibration('mcc118_scale_factor', 1.0)}"
         )
         if telemetry_logger:
             logger.info("Telemetry logging: ENABLED")
@@ -878,7 +947,7 @@ class TestVoltageEchoMonitor:
                     voltage_monitor,
                     environmental_states,
                     test_definition,
-                    rack_config,
+                    rack_instance,
                     stats,
                     telemetry_logger=telemetry_logger,
                 )
@@ -901,7 +970,7 @@ class TestVoltageEchoMonitor:
                         voltage_monitor,
                         environmental_states,
                         test_definition,
-                        rack_config,
+                        rack_instance,
                         stats,
                         telemetry_logger=telemetry_logger,
                     )

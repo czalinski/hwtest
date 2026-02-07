@@ -20,32 +20,12 @@ rack:
   description: "Raspberry Pi 5 MCC DAQ integration test rack with CAN bus"
 
 # =============================================================================
-# Calibration Factors
-# =============================================================================
-#
-# These factors correct for hardware-specific scaling in the signal path.
-# Measure and update these when changing wiring or hardware.
-#
-# To measure MCC 118 scale factor:
-#   1. Apply known voltage (e.g., 2.5V from calibrated source)
-#   2. Read raw value from MCC 118
-#   3. scale_factor = actual_voltage / raw_reading
-#
-# UUT calibration is included here because the UUT hardware is known
-# for this integration test setup (Pi 4 with Waveshare High-Precision AD/DA).
-
-calibration:
-  # UUT ADC has 2:1 voltage divider (Waveshare High-Precision AD/DA board)
-  # Raw reading must be multiplied by 2 to get actual input voltage
-  uut_adc_scale_factor: 2.0
-
-  # MCC 118 input attenuation due to wiring/protection circuitry
-  # Raw reading must be multiplied by this to get actual voltage
-  mcc118_scale_factor: 1.5
-
-# =============================================================================
 # Instruments
 # =============================================================================
+#
+# Note: Calibration factors are stored per-rack-instance in a separate file.
+# See ~/.config/hwtest/racks/<rack_class>_<serial>.yaml
+# Run 'hwtest-rack calibrate --serial <serial>' to calibrate.
 
 instruments:
   dio_controller:

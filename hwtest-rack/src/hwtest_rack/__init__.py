@@ -36,12 +36,19 @@ from hwtest_rack.config import (
     RackConfig,
     load_config,
 )
+from hwtest_rack.instance import (
+    CalibrationMetadata,
+    RackInstanceConfig,
+    RackInstanceInfo,
+    find_instance_config,
+    load_instance_config,
+)
 from hwtest_rack.loader import load_driver
 from hwtest_rack.protocols import DcPsuChannel, ElectronicLoadChannel, MultiChannelPsu
 from hwtest_rack.rack import Rack
 
 __all__ = [
-    # Config
+    # Config (rack class)
     "CalibrationConfig",
     "ChannelConfig",
     "ExpectedIdentity",
@@ -49,6 +56,12 @@ __all__ = [
     "RackConfig",
     "load_config",
     "load_driver",
+    # Instance (rack unit)
+    "CalibrationMetadata",
+    "RackInstanceConfig",
+    "RackInstanceInfo",
+    "find_instance_config",
+    "load_instance_config",
     # Rack
     "Rack",
     # Channel registry
