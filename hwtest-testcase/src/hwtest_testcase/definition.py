@@ -269,6 +269,36 @@ class MonitorDef:
 
 
 # =============================================================================
+# Logger Configuration
+# =============================================================================
+
+
+@dataclass
+class LoggerDef:
+    """Definition for a logger loaded from YAML.
+
+    Loggers record telemetry data to various backends (CSV, InfluxDB, etc.).
+    Unlike monitors, loggers do not have slot-specific configurations since
+    they capture system-wide telemetry rather than per-UUT data.
+
+    Attributes:
+        name: Logger name (key in the loggers dict).
+        module: Python module containing the logger class.
+        class_name: Name of the logger class.
+        kwargs: Arguments passed to logger constructor.
+        topics: List of topics this logger should subscribe to.
+        enabled: Whether this logger is enabled (can be toggled via env vars).
+    """
+
+    name: str
+    module: str
+    class_name: str
+    kwargs: dict[str, Any] = field(default_factory=dict)
+    topics: list[str] = field(default_factory=list)
+    enabled: bool = True
+
+
+# =============================================================================
 # State Definition
 # =============================================================================
 
@@ -326,7 +356,7 @@ class TestDefinition:
     """Complete test case definition loaded from YAML.
 
     This class represents all the configuration for a test case, including
-    parameters, states, and monitor configurations.
+    parameters, states, monitor configurations, and logger configurations.
 
     Attributes:
         test_case: Test case metadata.
@@ -335,6 +365,7 @@ class TestDefinition:
         monitor_states: Map of state IDs to state definitions.
         state_sequence: Ordered list of state IDs for test execution.
         monitors: Map of monitor names to monitor definitions.
+        loggers: Map of logger names to logger definitions.
         functional_requirements: Point-in-time check definitions (optional).
         source_path: Path to the YAML file (if loaded from file).
     """
@@ -345,6 +376,7 @@ class TestDefinition:
     monitor_states: dict[str, MonitorState]
     state_sequence: list[str]
     monitors: dict[str, MonitorDef]
+    loggers: dict[str, LoggerDef] = field(default_factory=dict)
     functional_requirements: dict[str, Any] = field(default_factory=dict)
     source_path: Path | None = None
 
@@ -375,6 +407,28 @@ class TestDefinition:
             KeyError: If monitor not found.
         """
         return self.monitors[monitor_name]
+
+    def get_logger(self, logger_name: str) -> LoggerDef:
+        """Get a logger definition by name.
+
+        Args:
+            logger_name: The logger name.
+
+        Returns:
+            The logger definition.
+
+        Raises:
+            KeyError: If logger not found.
+        """
+        return self.loggers[logger_name]
+
+    def get_enabled_loggers(self) -> list[LoggerDef]:
+        """Get all enabled logger definitions.
+
+        Returns:
+            List of LoggerDef objects where enabled=True.
+        """
+        return [lg for lg in self.loggers.values() if lg.enabled]
 
     def get_parameter(self, name: str, state_id: str | None = None) -> Any:
         """Get a parameter value, with optional state override.
@@ -521,6 +575,28 @@ class TestDefinition:
                 slot_number=slot_number,
             )
 
+        # Parse loggers
+        loggers: dict[str, LoggerDef] = {}
+        for logger_name, logger_data in data.get("loggers", {}).items():
+            # Check if enabled (default True, can be overridden by env var)
+            enabled = logger_data.get("enabled", True)
+            env_var = logger_data.get("enabled_env_var")
+            if env_var:
+                env_value = os.environ.get(env_var, "").lower()
+                if env_value in ("0", "false", "no", "off"):
+                    enabled = False
+                elif env_value in ("1", "true", "yes", "on"):
+                    enabled = True
+
+            loggers[logger_name] = LoggerDef(
+                name=logger_name,
+                module=logger_data.get("module", ""),
+                class_name=logger_data.get("class", ""),
+                kwargs=dict(logger_data.get("kwargs", {})),
+                topics=list(logger_data.get("topics", [])),
+                enabled=enabled,
+            )
+
         # Parse functional requirements (optional)
         functional_requirements = dict(data.get("functional_requirements", {}))
 
@@ -531,6 +607,7 @@ class TestDefinition:
             monitor_states=monitor_states,
             state_sequence=state_sequence,
             monitors=monitors,
+            loggers=loggers,
             functional_requirements=functional_requirements,
             source_path=source_path,
         )

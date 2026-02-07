@@ -354,3 +354,77 @@ if result.failed:
         log_system_failure(result=result)
         abort_test()  # Cannot trust UUT results
 ```
+
+## Logger Configuration
+
+Loggers record telemetry data to various backends (CSV, InfluxDB, etc.). Unlike monitors, loggers do not have slot-specific configurations since they capture system-wide telemetry rather than per-UUT data.
+
+### Logger Definition in YAML
+
+Loggers are configured in the test case YAML similar to monitors:
+
+```yaml
+loggers:
+  influxdb_logger:
+    module: hwtest_logger
+    class: InfluxDbStreamLogger
+    enabled: false  # Disabled by default
+    enabled_env_var: TELEMETRY_ENABLED  # Set to "1" to enable
+    kwargs:
+      url: "${INFLUXDB_URL:http://localhost:8086}"
+      org: "${INFLUXDB_ORG:hwtest}"
+      bucket: "${INFLUXDB_BUCKET:telemetry}"
+      token: "${INFLUXDB_TOKEN}"
+      measurement: voltage_echo
+      batch_size: 100
+      flush_interval_ms: 1000
+    topics:
+      - voltage_echo
+
+  csv_logger:
+    module: hwtest_logger
+    class: CsvStreamLogger
+    enabled: false
+    enabled_env_var: CSV_LOGGING_ENABLED
+    kwargs:
+      output_dir: "./logs"
+      organize_by_tags: true
+    topics:
+      - voltage_echo
+```
+
+### Logger Configuration Fields
+
+- **module/class**: Python module and class for dynamic loading
+- **kwargs**: Arguments passed to the logger constructor
+- **topics**: List of telemetry topics this logger should subscribe to
+- **enabled**: Whether this logger is enabled (default: true)
+- **enabled_env_var**: Environment variable that can override the enabled state
+
+### Logger Instantiation
+
+Test code can iterate over enabled loggers and instantiate them:
+
+```python
+from hwtest_testcase import load_definition
+
+definition = load_definition("voltage_echo_monitor")
+
+for logger_def in definition.get_enabled_loggers():
+    # Dynamic import and instantiation
+    module = importlib.import_module(logger_def.module)
+    logger_class = getattr(module, logger_def.class_name)
+    logger = logger_class(**logger_def.kwargs)
+
+    # Register topics
+    for topic in logger_def.topics:
+        logger.register_schema(topic, schema)
+
+    await logger.start(tags)
+```
+
+This design allows:
+- Test parameters to be changed without code review
+- Loggers to be enabled/disabled via environment variables
+- Multiple loggers to run simultaneously (e.g., CSV for debugging, InfluxDB for production)
+- Consistent configuration pattern with monitors

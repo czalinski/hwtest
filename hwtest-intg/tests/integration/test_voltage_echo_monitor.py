@@ -216,21 +216,6 @@ def _get_rack_instance() -> RackInstanceConfig:
 # =============================================================================
 
 
-def is_telemetry_enabled() -> bool:
-    """Check if telemetry logging is enabled."""
-    return os.environ.get("TELEMETRY_ENABLED", "0").lower() in ("1", "true", "yes")
-
-
-def get_influxdb_config() -> dict[str, Any]:
-    """Get InfluxDB configuration from environment variables."""
-    return {
-        "url": os.environ.get("INFLUXDB_URL", "http://localhost:8086"),
-        "org": os.environ.get("INFLUXDB_ORG", "hwtest"),
-        "bucket": os.environ.get("INFLUXDB_BUCKET", "telemetry"),
-        "token": os.environ.get("INFLUXDB_TOKEN"),
-    }
-
-
 def get_rack_id() -> str:
     """Get rack ID from environment."""
     return os.environ.get("RACK_ID", "pi5-mcc-intg-a")
@@ -504,66 +489,132 @@ def cancellation_token() -> Generator[CancellationToken, None, None]:
     token.restore_signal_handler()
 
 
+def _resolve_env_vars(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Resolve ${VAR:default} patterns in kwargs values.
+
+    Args:
+        kwargs: Dictionary with potential env var references.
+
+    Returns:
+        Dictionary with env vars resolved.
+    """
+    import re
+    result = {}
+    pattern = re.compile(r'\$\{([^}:]+)(?::([^}]*))?\}')
+
+    for key, value in kwargs.items():
+        if isinstance(value, str):
+            def replace(match: re.Match) -> str:
+                var_name = match.group(1)
+                default = match.group(2) or ""
+                return os.environ.get(var_name, default)
+            result[key] = pattern.sub(replace, value)
+        else:
+            result[key] = value
+
+    return result
+
+
 @pytest.fixture
-async def telemetry_logger() -> AsyncGenerator[Any, None]:
-    """Provide an InfluxDB telemetry logger if enabled."""
-    if not is_telemetry_enabled():
-        logger.info("Telemetry logging disabled (set TELEMETRY_ENABLED=1 to enable)")
+async def telemetry_logger(test_definition: TestDefinition) -> AsyncGenerator[Any, None]:
+    """Provide loggers based on YAML configuration.
+
+    Loggers are instantiated from the 'loggers' section of the test definition.
+    Only enabled loggers are started. Enable/disable via environment variables
+    specified in enabled_env_var.
+    """
+    import importlib
+
+    enabled_loggers = test_definition.get_enabled_loggers()
+
+    if not enabled_loggers:
+        logger.info("No loggers enabled (check YAML and environment variables)")
         yield None
         return
+
+    # For now, we only support one active logger in this fixture
+    # In the future, this could return a list of loggers
+    logger_def = enabled_loggers[0]
 
     try:
-        from hwtest_logger import InfluxDbStreamLogger, InfluxDbStreamLoggerConfig
-    except ImportError:
-        logger.warning("hwtest-logger[influxdb] not installed, telemetry disabled")
+        module = importlib.import_module(logger_def.module)
+        logger_class = getattr(module, logger_def.class_name)
+    except (ImportError, AttributeError) as exc:
+        logger.warning(
+            "Failed to load logger %s.%s: %s",
+            logger_def.module, logger_def.class_name, exc
+        )
         yield None
         return
 
-    config = get_influxdb_config()
-    if not config["token"]:
-        logger.warning("INFLUXDB_TOKEN not set, telemetry disabled")
+    # Resolve environment variables in kwargs
+    resolved_kwargs = _resolve_env_vars(logger_def.kwargs)
+
+    # Check for required token if this is InfluxDB
+    if "token" in resolved_kwargs and not resolved_kwargs["token"]:
+        logger.warning("Logger %s: token not set, skipping", logger_def.name)
         yield None
         return
 
-    logger_config = InfluxDbStreamLoggerConfig(
-        url=config["url"],
-        org=config["org"],
-        bucket=config["bucket"],
-        token=config["token"],
-        measurement="voltage_echo",
-        batch_size=100,
-        flush_interval_ms=1000,
-    )
+    # Create config object based on logger class
+    # Different loggers have different config classes
+    if logger_def.class_name == "InfluxDbStreamLogger":
+        try:
+            from hwtest_logger import InfluxDbStreamLoggerConfig
+            config = InfluxDbStreamLoggerConfig(**resolved_kwargs)
+            stream_logger = logger_class(config)
+        except Exception as exc:
+            logger.warning("Failed to create %s: %s", logger_def.name, exc)
+            yield None
+            return
+    elif logger_def.class_name == "CsvStreamLogger":
+        try:
+            from hwtest_logger import CsvStreamLoggerConfig
+            config = CsvStreamLoggerConfig(**resolved_kwargs)
+            stream_logger = logger_class(config)
+        except Exception as exc:
+            logger.warning("Failed to create %s: %s", logger_def.name, exc)
+            yield None
+            return
+    else:
+        # Generic instantiation - assume logger takes kwargs directly
+        try:
+            stream_logger = logger_class(**resolved_kwargs)
+        except Exception as exc:
+            logger.warning("Failed to create %s: %s", logger_def.name, exc)
+            yield None
+            return
 
-    influx_logger = InfluxDbStreamLogger(logger_config)
-    influx_logger.register_schema("voltage_echo", TELEMETRY_SCHEMA)
+    # Register schema for configured topics
+    for topic in logger_def.topics:
+        stream_logger.register_schema(topic, TELEMETRY_SCHEMA)
 
     test_mode = get_execution_mode()
     test_run_id = str(uuid.uuid4())[:8]
 
     tags = {
         "test_type": test_mode.value.upper(),
-        "test_case_id": "voltage_echo_monitor",
+        "test_case_id": test_definition.test_case.id,
         "test_run_id": test_run_id,
         "rack_id": get_rack_id(),
         "uut_id": get_uut_id(),
     }
 
     try:
-        await influx_logger.start(tags)
+        await stream_logger.start(tags)
         logger.info(
-            "Telemetry logging enabled: %s (run_id: %s)",
-            config["url"],
+            "Logger %s started (run_id: %s)",
+            logger_def.name,
             test_run_id,
         )
-        yield influx_logger
+        yield stream_logger
     except Exception as exc:
-        logger.warning("Failed to start InfluxDB logger: %s", exc)
+        logger.warning("Failed to start logger %s: %s", logger_def.name, exc)
         yield None
     finally:
-        if influx_logger.is_running:
-            await influx_logger.stop()
-            logger.info("Telemetry logger stopped")
+        if stream_logger.is_running:
+            await stream_logger.stop()
+            logger.info("Logger %s stopped", logger_def.name)
 
 
 # =============================================================================

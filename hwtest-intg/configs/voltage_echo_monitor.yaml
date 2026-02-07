@@ -133,6 +133,51 @@ monitors:
           within_range: [4.0, 0.30]  # 4.0V ± 0.30V
 
 # =============================================================================
+# Loggers
+# =============================================================================
+#
+# Loggers record telemetry data to various backends. Unlike monitors, loggers
+# do not have slot-specific configurations since they capture system-wide
+# telemetry rather than per-UUT data.
+#
+# Each logger specifies:
+#   - module/class: Python module and class for dynamic loading
+#   - kwargs: Arguments passed to logger constructor
+#   - topics: List of topics this logger should subscribe to
+#   - enabled: Whether this logger is enabled (default: true)
+#   - enabled_env_var: Environment variable to control enabled state
+
+loggers:
+  influxdb_logger:
+    module: hwtest_logger
+    class: InfluxDbStreamLogger
+    enabled: false  # Disabled by default
+    enabled_env_var: TELEMETRY_ENABLED  # Set to "1" to enable
+    kwargs:
+      url: "${INFLUXDB_URL:http://localhost:8086}"
+      org: "${INFLUXDB_ORG:hwtest}"
+      bucket: "${INFLUXDB_BUCKET:telemetry}"
+      token: "${INFLUXDB_TOKEN}"
+      measurement: voltage_echo
+      batch_size: 100
+      flush_interval_ms: 1000
+    topics:
+      - voltage_echo
+
+  # CSV logger for local file storage (useful for debugging)
+  # csv_logger:
+  #   module: hwtest_logger
+  #   class: CsvStreamLogger
+  #   enabled: false
+  #   enabled_env_var: CSV_LOGGING_ENABLED
+  #   kwargs:
+  #     output_dir: "./logs"
+  #     organize_by_tags: true
+  #     buffer_size: 100
+  #   topics:
+  #     - voltage_echo
+
+# =============================================================================
 # Functional Requirements (optional)
 # =============================================================================
 #

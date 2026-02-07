@@ -27,6 +27,7 @@ Example usage:
 from hwtest_testcase.context import TestContext
 from hwtest_testcase.definition import (
     BoundSpec,
+    LoggerDef,
     MonitorDef,
     MonitorState,
     TestCaseInfo,
@@ -42,6 +43,7 @@ from hwtest_testcase.testcase import TestCase, TestCaseResult, TestStatus
 __all__ = [
     # Definition loading
     "BoundSpec",
+    "LoggerDef",
     "MonitorDef",
     "MonitorState",
     "TestCaseInfo",
