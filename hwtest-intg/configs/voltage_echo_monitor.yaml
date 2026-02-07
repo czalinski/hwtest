@@ -2,7 +2,7 @@
 # Voltage Echo Monitor Test Definition
 # =============================================================================
 #
-# This file defines the parameters and environmental states for the voltage
+# This file defines the parameters, states, and monitors for the voltage
 # echo monitor test. It is the source of truth for test configuration and
 # should be reviewed by the team (managers, EEs, test developers) when
 # requirements change.
@@ -22,7 +22,7 @@
 test_case:
   id: voltage_echo_monitor
   name: Voltage Echo Monitor Test
-  version: "1.0.0"
+  version: "1.1.0"
   description: |
     Tests analog voltage echo loop through UUT ADC/DAC with state-based monitoring.
     The test rack outputs a target voltage, the UUT reads and echoes it back,
@@ -33,78 +33,44 @@ test_case:
 # =============================================================================
 #
 # The test rack configuration that this test case is designed to run on.
-# The rack config defines:
-#   - Physical instrument configurations
-#   - Logical channel name to hardware mappings
-#   - Calibration factors for hardware-specific scaling
-#
 # Override with RACK_CONFIG environment variable if running on a different rack.
 
 rack: pi5_mcc_intg_a_rack
 
 # =============================================================================
-# Global Parameters
+# Case Parameters
 # =============================================================================
 #
-# These parameters apply to all states unless overridden.
+# Global parameters that apply to all states unless overridden per-state.
 
-parameters:
+case_parameters:
   # Time to wait after voltage changes for signals to settle
-  # Increase if seeing intermittent failures due to timing
   settling_time_seconds: 0.025  # 25ms allows ~10 Hz with HTTP overhead
 
-  # Default voltage tolerance (±V)
-  # This is the acceptable error for the full round-trip measurement
-  # Components: DAC accuracy + ADC accuracy + noise + settling
-  voltage_tolerance: 0.30  # ±300mV for full round-trip
-
 # =============================================================================
-# Environmental States
+# Monitor States
 # =============================================================================
 #
-# Each state defines a test condition with specific voltage targets and
-# pass/fail thresholds. States are executed in the order listed in
-# state_sequence below.
+# Environmental states that define test conditions. Each state can override
+# case_parameters. States are executed in the order listed in state_sequence.
 #
-# For each state:
-#   - target_voltage: The voltage the test rack DAC will output
-#   - thresholds: Pass/fail bounds for the measured echo voltage
-#
-# Threshold values are typically: target_voltage ± voltage_tolerance
-# but can be customized per state if needed.
+# Reserved state names: 'default' (fallback bounds), 'any' (skip checking)
 
-states:
+monitor_states:
   minimum:
     name: Minimum Voltage
     description: Lowest voltage in the test range
     target_voltage: 1.0  # V
-
-    # Thresholds for this state
-    # measured voltage must be within [low, high] to pass
-    thresholds:
-      echo_voltage:
-        low: 0.70   # V (target - tolerance)
-        high: 1.30  # V (target + tolerance)
 
   middle:
     name: Middle Voltage
     description: Mid-point voltage in the test range
     target_voltage: 2.5  # V
 
-    thresholds:
-      echo_voltage:
-        low: 2.20   # V
-        high: 2.80  # V
-
   maximum:
     name: Maximum Voltage
     description: Highest voltage in the test range
     target_voltage: 4.0  # V
-
-    thresholds:
-      echo_voltage:
-        low: 3.70   # V
-        high: 4.30  # V
 
 # =============================================================================
 # State Sequence
@@ -117,3 +83,59 @@ state_sequence:
   - minimum
   - middle
   - maximum
+
+# =============================================================================
+# Monitors
+# =============================================================================
+#
+# Monitors continuously check measurement values against state-dependent bounds.
+# Each monitor specifies:
+#   - module/class: Python module and class for dynamic loading
+#   - kwargs: Arguments passed to monitor constructor
+#   - configuration: Bounds per field, per state
+#
+# Bound types:
+#   within_range: [center, tolerance]  - value within center ± tolerance
+#   good_interval: [low, high]         - value within [low, high]
+#   less_than: value                   - value < threshold
+#   greater_than: value                - value > threshold
+#   good_values: [list]                - value in discrete set
+#   special: any                       - always pass (no check)
+
+monitors:
+  echo_voltage_monitor:
+    module: hwtest_intg.monitors.echo_voltage
+    class: EchoVoltageMonitor
+    kwargs:
+      channel: echo_voltage
+    configuration:
+      # Default bounds if a state doesn't specify (use 'special: any' to skip)
+      default:
+        echo_voltage:
+          special: any  # Must specify per state
+
+      # Per-state bounds
+      minimum:
+        echo_voltage:
+          within_range: [1.0, 0.30]  # 1.0V ± 0.30V
+
+      middle:
+        echo_voltage:
+          within_range: [2.5, 0.30]  # 2.5V ± 0.30V
+
+      maximum:
+        echo_voltage:
+          within_range: [4.0, 0.30]  # 4.0V ± 0.30V
+
+# =============================================================================
+# Functional Requirements (optional)
+# =============================================================================
+#
+# Point-in-time checks performed at specific moments (e.g., initialization).
+# Unlike monitors, these are not continuously evaluated.
+#
+# functional_requirements:
+#   initial_voltage_check:
+#     default:
+#       rack_dac_voltage:
+#         good_interval: [0.0, 0.1]  # Should be near zero at start

@@ -7,7 +7,7 @@ Supports three modes:
 - HASS: Continuous loop until failure or cancelled
 
 Configuration:
-    Test parameters (states, thresholds, timing) are loaded from:
+    Test parameters (states, monitors, timing) are loaded from:
         configs/voltage_echo_monitor.yaml
 
     Rack class configuration (instruments, channels) is loaded from:
@@ -53,7 +53,6 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import signal
@@ -66,12 +65,11 @@ from typing import Any, AsyncGenerator, Generator
 
 import pytest
 
-from hwtest_core.types.common import ChannelId, DataType, MonitorId, SourceId, StateId, Timestamp
-from hwtest_core.types.monitor import MonitorResult, MonitorVerdict, ThresholdViolation
+from hwtest_core.types.common import DataType, MonitorId, SourceId, StateId, Timestamp
+from hwtest_core.types.monitor import MonitorResult, MonitorVerdict
 from hwtest_core.types.state import EnvironmentalState, StateTransition
 from hwtest_core.types.streaming import StreamData, StreamField, StreamSchema
-from hwtest_core.types.threshold import BoundType, StateThresholds, Threshold, ThresholdBound
-from hwtest_testcase import TestDefinition, StateDef, load_definition
+from hwtest_testcase import TestDefinition, MonitorState, MonitorDef, BoundSpec, load_definition
 from hwtest_rack.config import RackConfig, load_config as load_rack_config
 from hwtest_rack.instance import RackInstanceConfig, load_instance_config
 
@@ -110,7 +108,6 @@ def get_test_definition() -> TestDefinition:
 
 
 # Load definition at module level for use in fixtures
-# This allows the YAML to be the single source of truth
 _definition: TestDefinition | None = None
 _rack_config: RackConfig | None = None
 _rack_instance: RackInstanceConfig | None = None
@@ -126,26 +123,14 @@ def _get_definition() -> TestDefinition:
 
 
 def _find_rack_config(rack_id: str) -> Path | None:
-    """Find a rack configuration file by ID.
-
-    Args:
-        rack_id: Rack identifier (e.g., "pi5_mcc_intg_a_rack").
-
-    Returns:
-        Path to the rack config file, or None if not found.
-    """
-    # Check environment variable override
+    """Find a rack configuration file by ID."""
     env_path = os.environ.get("RACK_CONFIG")
     if env_path:
         path = Path(env_path)
         if path.is_file():
             return path
 
-    # Search in standard paths
-    filenames = [
-        f"{rack_id}.yaml",
-        f"{rack_id}.yml",
-    ]
+    filenames = [f"{rack_id}.yaml", f"{rack_id}.yml"]
 
     for search_dir in RACK_CONFIG_SEARCH_PATHS:
         if not search_dir.is_dir():
@@ -159,10 +144,7 @@ def _find_rack_config(rack_id: str) -> Path | None:
 
 
 def _get_rack_config() -> RackConfig:
-    """Get cached rack configuration.
-
-    Loads the rack config referenced by the test definition.
-    """
+    """Get cached rack configuration."""
     global _rack_config
     if _rack_config is None:
         definition = _get_definition()
@@ -185,11 +167,7 @@ def _get_rack_config() -> RackConfig:
 
 
 def _get_rack_instance() -> RackInstanceConfig:
-    """Get cached rack instance configuration.
-
-    Loads the rack instance config for calibration data.
-    Uses RACK_SERIAL environment variable or finds first matching instance.
-    """
+    """Get cached rack instance configuration."""
     global _rack_instance
     if _rack_instance is None:
         definition = _get_definition()
@@ -198,9 +176,7 @@ def _get_rack_instance() -> RackInstanceConfig:
         if rack_id is None:
             raise ValueError("Test definition does not specify a rack reference")
 
-        # Remove "_rack" suffix if present for instance lookup
         rack_class = rack_id.replace("_rack", "")
-
         serial = os.environ.get("RACK_SERIAL")
 
         try:
@@ -210,7 +186,6 @@ def _get_rack_instance() -> RackInstanceConfig:
                 f"#{_rack_instance.instance.serial_number} from {_rack_instance.source_path}"
             )
         except FileNotFoundError:
-            # Fall back to default calibration values
             logger.warning(
                 f"Rack instance config not found for class '{rack_class}'"
                 + (f" serial '{serial}'" if serial else "")
@@ -233,13 +208,6 @@ def _get_rack_instance() -> RackInstanceConfig:
             )
 
     return _rack_instance
-
-
-# =============================================================================
-# Channel ID for monitoring
-# =============================================================================
-
-ECHO_VOLTAGE_CHANNEL = ChannelId("echo_voltage")
 
 
 # =============================================================================
@@ -341,20 +309,20 @@ def get_execution_mode() -> ExecutionMode:
 # =============================================================================
 
 
-def create_environmental_state(state_def: StateDef) -> EnvironmentalState:
-    """Create an EnvironmentalState from a StateDef.
+def create_environmental_state(state: MonitorState) -> EnvironmentalState:
+    """Create an EnvironmentalState from a MonitorState.
 
     Args:
-        state_def: State definition from YAML.
+        state: Monitor state from YAML.
 
     Returns:
         EnvironmentalState for use with monitoring.
     """
     return EnvironmentalState(
-        state_id=StateId(state_def.id),
-        name=state_def.name,
-        description=state_def.description or f"{state_def.name} ({state_def.target_voltage}V)",
-        metadata={"target_voltage": state_def.target_voltage, **state_def.metadata},
+        state_id=StateId(state.id),
+        name=state.name,
+        description=state.description or f"{state.name} ({state.target_voltage}V)",
+        metadata={"target_voltage": state.target_voltage, **state.parameters},
     )
 
 
@@ -375,53 +343,18 @@ def create_transition_state(
 
 
 # =============================================================================
-# State Thresholds (from YAML definition)
-# =============================================================================
-
-
-def create_state_thresholds(state_def: StateDef) -> StateThresholds:
-    """Create StateThresholds from a StateDef.
-
-    Args:
-        state_def: State definition from YAML with threshold bounds.
-
-    Returns:
-        StateThresholds for monitoring.
-    """
-    thresholds: dict[ChannelId, Threshold] = {}
-
-    echo_thresh = state_def.thresholds.get("echo_voltage")
-    if echo_thresh is not None:
-        thresholds[ECHO_VOLTAGE_CHANNEL] = Threshold(
-            channel=ECHO_VOLTAGE_CHANNEL,
-            low=ThresholdBound(value=echo_thresh.low, bound_type=BoundType.INCLUSIVE)
-            if echo_thresh.low is not None
-            else None,
-            high=ThresholdBound(value=echo_thresh.high, bound_type=BoundType.INCLUSIVE)
-            if echo_thresh.high is not None
-            else None,
-        )
-
-    return StateThresholds(
-        state_id=StateId(state_def.id),
-        thresholds=thresholds,
-    )
-
-
-# =============================================================================
 # Voltage Echo Monitor
 # =============================================================================
 
 
 @dataclass
 class VoltageEchoMonitor:
-    """Monitor that evaluates echoed voltage against state-dependent thresholds.
+    """Monitor that evaluates echoed voltage against state-dependent bounds.
 
-    This monitor checks that the voltage read back through the echo loop
-    matches the expected voltage for the current environmental state.
+    Uses MonitorDef from the test definition YAML to get bounds per state.
     """
 
-    state_thresholds: dict[StateId, StateThresholds]
+    monitor_def: MonitorDef
     monitor_id: MonitorId = MonitorId("voltage_echo_monitor")
 
     def evaluate(
@@ -429,7 +362,7 @@ class VoltageEchoMonitor:
         measured_voltage: float,
         state: EnvironmentalState,
     ) -> MonitorResult:
-        """Evaluate the measured voltage against the current state's threshold.
+        """Evaluate the measured voltage against the current state's bounds.
 
         Args:
             measured_voltage: The voltage measured at the end of the echo loop.
@@ -439,6 +372,7 @@ class VoltageEchoMonitor:
             MonitorResult with PASS, FAIL, or SKIP verdict.
         """
         timestamp = Timestamp.now()
+        field_name = self.monitor_def.kwargs.get("channel", "echo_voltage")
 
         # Skip evaluation during transitions
         if state.is_transition:
@@ -450,54 +384,56 @@ class VoltageEchoMonitor:
                 message="Skipping evaluation during state transition",
             )
 
-        # Get thresholds for current state
-        thresholds = self.state_thresholds.get(state.state_id)
-        if thresholds is None:
+        # Get bounds for this state and field
+        bounds = self.monitor_def.get_bounds(state.state_id, field_name)
+        if bounds is None:
             return MonitorResult(
                 monitor_id=self.monitor_id,
                 verdict=MonitorVerdict.ERROR,
                 timestamp=timestamp,
                 state_id=state.state_id,
-                message=f"No thresholds defined for state {state.state_id}",
+                message=f"No bounds defined for field '{field_name}' in state {state.state_id}",
             )
 
-        # Check the measured voltage against threshold
-        threshold = thresholds.get_threshold(ECHO_VOLTAGE_CHANNEL)
-        if threshold is None:
+        # Check if bounds specify 'any' (always pass)
+        if bounds.is_any:
             return MonitorResult(
                 monitor_id=self.monitor_id,
-                verdict=MonitorVerdict.ERROR,
+                verdict=MonitorVerdict.SKIP,
                 timestamp=timestamp,
                 state_id=state.state_id,
-                message=f"No threshold defined for channel {ECHO_VOLTAGE_CHANNEL}",
+                message=f"Bounds set to 'any' for {state.name} - skipping check",
             )
 
-        if threshold.check(measured_voltage):
+        # Check the measured value against bounds
+        if bounds.check(measured_voltage):
             target = state.metadata.get("target_voltage", "unknown")
+            interval = bounds.to_interval()
+            if interval:
+                low, high = interval
+                bounds_str = f"[{low:.2f}V, {high:.2f}V]"
+            else:
+                bounds_str = str(bounds.value)
             return MonitorResult(
                 monitor_id=self.monitor_id,
                 verdict=MonitorVerdict.PASS,
                 timestamp=timestamp,
                 state_id=state.state_id,
-                message=f"Voltage {measured_voltage:.3f}V within threshold for {state.name} (target: {target}V)",
+                message=f"Voltage {measured_voltage:.3f}V within {bounds_str} for {state.name} (target: {target}V)",
             )
         else:
-            # Create violation record
-            low_val = threshold.low.value if threshold.low else float("-inf")
-            high_val = threshold.high.value if threshold.high else float("inf")
-            violation = ThresholdViolation(
-                channel=ECHO_VOLTAGE_CHANNEL,
-                value=measured_voltage,
-                threshold=threshold,
-                message=f"Voltage {measured_voltage:.3f}V outside [{low_val:.3f}V, {high_val:.3f}V]",
-            )
+            interval = bounds.to_interval()
+            if interval:
+                low, high = interval
+                bounds_str = f"[{low:.2f}V, {high:.2f}V]"
+            else:
+                bounds_str = str(bounds.value)
             return MonitorResult(
                 monitor_id=self.monitor_id,
                 verdict=MonitorVerdict.FAIL,
                 timestamp=timestamp,
                 state_id=state.state_id,
-                violations=(violation,),
-                message=f"Voltage out of range for {state.name}",
+                message=f"Voltage {measured_voltage:.3f}V outside {bounds_str} for {state.name}",
             )
 
 
@@ -655,20 +591,18 @@ def mcc118_adc() -> Generator[Any, None, None]:
 
 @pytest.fixture
 def voltage_monitor(test_definition: TestDefinition) -> VoltageEchoMonitor:
-    """Provide a voltage echo monitor with thresholds from YAML."""
-    state_thresholds: dict[StateId, StateThresholds] = {}
+    """Provide a voltage echo monitor with bounds from YAML."""
+    monitor_def = test_definition.monitors.get("echo_voltage_monitor")
+    if monitor_def is None:
+        raise ValueError("No 'echo_voltage_monitor' defined in test definition")
 
-    for state_def in test_definition.state_sequence:
-        state_id = StateId(state_def.id)
-        state_thresholds[state_id] = create_state_thresholds(state_def)
-
-    return VoltageEchoMonitor(state_thresholds=state_thresholds)
+    return VoltageEchoMonitor(monitor_def=monitor_def)
 
 
 @pytest.fixture
 def environmental_states(test_definition: TestDefinition) -> list[EnvironmentalState]:
     """Provide environmental states from YAML definition."""
-    return [create_environmental_state(s) for s in test_definition.state_sequence]
+    return [create_environmental_state(s) for s in test_definition.get_states_in_sequence()]
 
 
 @pytest.fixture
@@ -682,10 +616,7 @@ def cancellation_token() -> Generator[CancellationToken, None, None]:
 
 @pytest.fixture
 async def telemetry_logger() -> AsyncGenerator[Any, None]:
-    """Provide an InfluxDB telemetry logger if enabled.
-
-    Yields None if telemetry is disabled or InfluxDB is not configured.
-    """
+    """Provide an InfluxDB telemetry logger if enabled."""
     if not is_telemetry_enabled():
         logger.info("Telemetry logging disabled (set TELEMETRY_ENABLED=1 to enable)")
         yield None
@@ -770,12 +701,9 @@ class TestVoltageEchoMonitor:
         definition: TestDefinition,
         rack_instance: RackInstanceConfig,
     ) -> VoltageReadings:
-        """Run one echo cycle for a given state.
-
-        Returns all voltage readings from the echo loop.
-        """
+        """Run one echo cycle for a given state."""
         target_voltage = state.metadata.get("target_voltage", 0.0)
-        settling_time = definition.parameters.settling_time_seconds
+        settling_time = definition.case_parameters.get("settling_time_seconds", 0.025)
         uut_adc_scale = rack_instance.get_calibration("uut_adc_scale_factor", 1.0)
         mcc118_scale = rack_instance.get_calibration("mcc118_scale_factor", 1.0)
 
@@ -801,9 +729,9 @@ class TestVoltageEchoMonitor:
 
         return VoltageReadings(
             target_voltage=target_voltage,
-            rack_dac_voltage=target_voltage,  # DAC was set to target
+            rack_dac_voltage=target_voltage,
             uut_adc_voltage=uut_adc_voltage,
-            uut_dac_voltage=uut_adc_voltage,  # DAC was set to calibrated ADC reading
+            uut_dac_voltage=uut_adc_voltage,
             rack_adc_voltage=measured_voltage,
             state_name=state.name,
         )
@@ -821,11 +749,10 @@ class TestVoltageEchoMonitor:
         data = StreamData(
             schema_id=TELEMETRY_SCHEMA.schema_id,
             timestamp_ns=timestamp_ns,
-            period_ns=0,  # Single sample, no period
+            period_ns=0,
             samples=(readings.as_tuple(),),
         )
 
-        # Add state_name as a per-point tag for efficient filtering
         extra_tags = {"state": readings.state_name.lower()}
 
         try:
@@ -850,40 +777,27 @@ class TestVoltageEchoMonitor:
         Returns the first failing result, or None if all passed.
         """
         for i, state in enumerate(states):
-            # Log state transition
             if i > 0:
                 prev_state = states[i - 1]
-                transition = StateTransition(
-                    from_state=prev_state.state_id,
-                    to_state=state.state_id,
-                    timestamp=Timestamp.now(),
-                    reason=f"Cycling to {state.name}",
-                )
                 logger.info(f"State transition: {prev_state.name} -> {state.name}")
 
             logger.info(
                 f"Testing state: {state.name} (target: {state.metadata.get('target_voltage')}V)"
             )
 
-            # Run echo cycle
             readings = await self._run_echo_cycle(
                 uut_client, mcc152_dac, mcc118_adc, state, definition, rack_instance
             )
 
-            # Log telemetry
             await self._log_telemetry(telemetry_logger, readings)
 
-            # Evaluate with monitor (use the final measured voltage)
             result = monitor.evaluate(readings.rack_adc_voltage, state)
             stats.record(result)
 
-            # Log result
             if result.passed:
                 logger.info(f"  PASS: {result.message}")
             elif result.failed:
                 logger.error(f"  FAIL: {result.message}")
-                for violation in result.violations:
-                    logger.error(f"    Violation: {violation.message}")
                 return result
             else:
                 logger.warning(f"  {result.verdict.name}: {result.message}")
@@ -917,7 +831,6 @@ class TestVoltageEchoMonitor:
         """
         test_mode = get_execution_mode()
         stats = RunStatistics()
-        tolerance = test_definition.parameters.voltage_tolerance
 
         logger.info(f"Starting voltage echo monitor test in {test_mode.value.upper()} mode")
         logger.info(f"Definition: {test_definition.source_path}")
@@ -926,8 +839,9 @@ class TestVoltageEchoMonitor:
             f"#{rack_instance.instance.serial_number}"
         )
         logger.info(f"States: {[s.name for s in environmental_states]}")
-        logger.info(f"Voltage tolerance: ±{tolerance}V")
-        logger.info(f"Settling time: {test_definition.parameters.settling_time_seconds}s")
+        logger.info(
+            f"Settling time: {test_definition.case_parameters.get('settling_time_seconds', 0.025)}s"
+        )
         logger.info(
             f"Calibration: UUT ADC={rack_instance.get_calibration('uut_adc_scale_factor', 1.0)}, "
             f"MCC118={rack_instance.get_calibration('mcc118_scale_factor', 1.0)}"
@@ -939,7 +853,6 @@ class TestVoltageEchoMonitor:
 
         try:
             if test_mode == ExecutionMode.FUNCTIONAL:
-                # Single pass
                 failure = await self._run_single_pass(
                     uut_client,
                     mcc152_dac,
@@ -955,7 +868,6 @@ class TestVoltageEchoMonitor:
                     pytest.fail(f"Monitor failure: {failure.message}")
 
             else:
-                # Continuous mode (HALT or HASS)
                 logger.info("Press Ctrl+C to stop")
                 cycle = 0
 
@@ -982,15 +894,12 @@ class TestVoltageEchoMonitor:
 
                     logger.info(f"Cycle {cycle} complete. {stats.summary()}")
 
-                # Cancelled gracefully
                 logger.info(f"Test cancelled after {stats.cycles_completed} cycles")
 
         finally:
-            # Reset DAC outputs
             mcc152_dac.a_out_write(0, 0.0)
             await uut_client.dac_write(0, 0.0)
             logger.info(f"Final statistics: {stats.summary()}")
 
-        # Assert at least one pass in continuous mode
         if test_mode in (ExecutionMode.HALT, ExecutionMode.HASS):
             assert stats.passes > 0, "No successful measurements recorded"

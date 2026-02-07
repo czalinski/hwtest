@@ -5,32 +5,30 @@ hardware test cases with environmental state management and monitoring.
 
 Example usage:
 
-    from hwtest_testcase import TestCase, TestPhase, TestContext
+    from hwtest_testcase import TestDefinition, load_definition
 
-    class VoltageStressTest(TestCase):
-        async def setup(self) -> None:
-            # Configure instruments
-            pass
+    # Load test definition from YAML
+    definition = load_definition("voltage_echo_monitor")
 
-        async def execute(self) -> None:
-            # Run through test phases
-            await self.run_phase(self.ambient_phase)
-            await self.run_phase(self.stress_phase)
+    # Access parameters
+    settling_time = definition.case_parameters["settling_time_seconds"]
 
-        async def teardown(self) -> None:
-            # Cleanup
-            pass
+    # Get monitor configuration
+    monitor = definition.monitors["echo_voltage_monitor"]
+    bounds = monitor.get_bounds("minimum", "echo_voltage")
+
+    # Check a value against bounds
+    if bounds.check(measured_voltage):
+        print("PASS")
 """
 
 from hwtest_testcase.context import TestContext
 from hwtest_testcase.definition import (
-    CalibrationDef,
-    ChannelDef,
-    ParametersDef,
-    StateDef,
+    BoundSpec,
+    MonitorDef,
+    MonitorState,
     TestCaseInfo,
     TestDefinition,
-    ThresholdDef,
     find_definition_file,
     load_definition,
 )
@@ -40,13 +38,11 @@ from hwtest_testcase.testcase import TestCase, TestCaseResult, TestStatus
 
 __all__ = [
     # Definition loading
-    "CalibrationDef",
-    "ChannelDef",
-    "ParametersDef",
-    "StateDef",
+    "BoundSpec",
+    "MonitorDef",
+    "MonitorState",
     "TestCaseInfo",
     "TestDefinition",
-    "ThresholdDef",
     "find_definition_file",
     "load_definition",
     # Test execution
