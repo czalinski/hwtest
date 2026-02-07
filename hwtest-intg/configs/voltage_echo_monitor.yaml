@@ -104,8 +104,8 @@ state_sequence:
 
 monitors:
   echo_voltage_monitor:
-    module: hwtest_intg.monitors.echo_voltage
-    class: EchoVoltageMonitor
+    module: hwtest_testcase
+    class: Monitor
     kwargs:
       channel: echo_voltage
     configuration:

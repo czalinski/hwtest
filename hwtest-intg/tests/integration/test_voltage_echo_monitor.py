@@ -65,11 +65,11 @@ from typing import Any, AsyncGenerator, Generator
 
 import pytest
 
-from hwtest_core.types.common import DataType, MonitorId, SourceId, StateId, Timestamp
+from hwtest_core.types.common import DataType, SourceId, StateId, Timestamp
 from hwtest_core.types.monitor import MonitorResult, MonitorVerdict
 from hwtest_core.types.state import EnvironmentalState, StateTransition
 from hwtest_core.types.streaming import StreamData, StreamField, StreamSchema
-from hwtest_testcase import TestDefinition, MonitorState, MonitorDef, BoundSpec, load_definition
+from hwtest_testcase import Monitor, TestDefinition, MonitorState, load_definition
 from hwtest_rack.config import RackConfig, load_config as load_rack_config
 from hwtest_rack.instance import RackInstanceConfig, load_instance_config
 
@@ -343,101 +343,6 @@ def create_transition_state(
 
 
 # =============================================================================
-# Voltage Echo Monitor
-# =============================================================================
-
-
-@dataclass
-class VoltageEchoMonitor:
-    """Monitor that evaluates echoed voltage against state-dependent bounds.
-
-    Uses MonitorDef from the test definition YAML to get bounds per state.
-    """
-
-    monitor_def: MonitorDef
-    monitor_id: MonitorId = MonitorId("voltage_echo_monitor")
-
-    def evaluate(
-        self,
-        measured_voltage: float,
-        state: EnvironmentalState,
-    ) -> MonitorResult:
-        """Evaluate the measured voltage against the current state's bounds.
-
-        Args:
-            measured_voltage: The voltage measured at the end of the echo loop.
-            state: The current environmental state.
-
-        Returns:
-            MonitorResult with PASS, FAIL, or SKIP verdict.
-        """
-        timestamp = Timestamp.now()
-        field_name = self.monitor_def.kwargs.get("channel", "echo_voltage")
-
-        # Skip evaluation during transitions
-        if state.is_transition:
-            return MonitorResult(
-                monitor_id=self.monitor_id,
-                verdict=MonitorVerdict.SKIP,
-                timestamp=timestamp,
-                state_id=state.state_id,
-                message="Skipping evaluation during state transition",
-            )
-
-        # Get bounds for this state and field
-        bounds = self.monitor_def.get_bounds(state.state_id, field_name)
-        if bounds is None:
-            return MonitorResult(
-                monitor_id=self.monitor_id,
-                verdict=MonitorVerdict.ERROR,
-                timestamp=timestamp,
-                state_id=state.state_id,
-                message=f"No bounds defined for field '{field_name}' in state {state.state_id}",
-            )
-
-        # Check if bounds specify 'any' (always pass)
-        if bounds.is_any:
-            return MonitorResult(
-                monitor_id=self.monitor_id,
-                verdict=MonitorVerdict.SKIP,
-                timestamp=timestamp,
-                state_id=state.state_id,
-                message=f"Bounds set to 'any' for {state.name} - skipping check",
-            )
-
-        # Check the measured value against bounds
-        if bounds.check(measured_voltage):
-            target = state.metadata.get("target_voltage", "unknown")
-            interval = bounds.to_interval()
-            if interval:
-                low, high = interval
-                bounds_str = f"[{low:.2f}V, {high:.2f}V]"
-            else:
-                bounds_str = str(bounds.value)
-            return MonitorResult(
-                monitor_id=self.monitor_id,
-                verdict=MonitorVerdict.PASS,
-                timestamp=timestamp,
-                state_id=state.state_id,
-                message=f"Voltage {measured_voltage:.3f}V within {bounds_str} for {state.name} (target: {target}V)",
-            )
-        else:
-            interval = bounds.to_interval()
-            if interval:
-                low, high = interval
-                bounds_str = f"[{low:.2f}V, {high:.2f}V]"
-            else:
-                bounds_str = str(bounds.value)
-            return MonitorResult(
-                monitor_id=self.monitor_id,
-                verdict=MonitorVerdict.FAIL,
-                timestamp=timestamp,
-                state_id=state.state_id,
-                message=f"Voltage {measured_voltage:.3f}V outside {bounds_str} for {state.name}",
-            )
-
-
-# =============================================================================
 # Test Statistics
 # =============================================================================
 
@@ -590,13 +495,13 @@ def mcc118_adc() -> Generator[Any, None, None]:
 
 
 @pytest.fixture
-def voltage_monitor(test_definition: TestDefinition) -> VoltageEchoMonitor:
+def voltage_monitor(test_definition: TestDefinition) -> Monitor:
     """Provide a voltage echo monitor with bounds from YAML."""
     monitor_def = test_definition.monitors.get("echo_voltage_monitor")
     if monitor_def is None:
         raise ValueError("No 'echo_voltage_monitor' defined in test definition")
 
-    return VoltageEchoMonitor(monitor_def=monitor_def)
+    return Monitor(monitor_def=monitor_def)
 
 
 @pytest.fixture
@@ -765,7 +670,7 @@ class TestVoltageEchoMonitor:
         uut_client: Any,
         mcc152_dac: Any,
         mcc118_adc: Any,
-        monitor: VoltageEchoMonitor,
+        monitor: Monitor,
         states: list[EnvironmentalState],
         definition: TestDefinition,
         rack_instance: RackInstanceConfig,
@@ -791,7 +696,7 @@ class TestVoltageEchoMonitor:
 
             await self._log_telemetry(telemetry_logger, readings)
 
-            result = monitor.evaluate(readings.rack_adc_voltage, state)
+            result = monitor.evaluate({"echo_voltage": readings.rack_adc_voltage}, state)
             stats.record(result)
 
             if result.passed:
@@ -812,7 +717,7 @@ class TestVoltageEchoMonitor:
         uut_client: Any,
         mcc152_dac: Any,
         mcc118_adc: Any,
-        voltage_monitor: VoltageEchoMonitor,
+        voltage_monitor: Monitor,
         environmental_states: list[EnvironmentalState],
         test_definition: TestDefinition,
         rack_instance: RackInstanceConfig,
