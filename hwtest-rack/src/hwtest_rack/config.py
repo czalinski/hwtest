@@ -95,17 +95,44 @@ class InstrumentConfig:
 
 
 @dataclass(frozen=True)
+class CalibrationConfig:
+    """Calibration factors for hardware.
+
+    Hardware-specific scale factors that correct for signal path characteristics
+    such as voltage dividers, attenuation, or input impedance effects.
+
+    Attributes:
+        factors: Map of calibration factor names to values.
+    """
+
+    factors: dict[str, float] = field(default_factory=dict)
+
+    def get(self, name: str, default: float = 1.0) -> float:
+        """Get a calibration factor by name.
+
+        Args:
+            name: Factor name (e.g., "uut_adc_scale_factor").
+            default: Default value if factor not defined.
+
+        Returns:
+            The calibration factor value.
+        """
+        return self.factors.get(name, default)
+
+
+@dataclass(frozen=True)
 class RackConfig:
     """Configuration for a test rack.
 
     The top-level configuration object representing an entire test rack,
-    including all instruments and the channel registry built from their
-    channel configurations.
+    including all instruments, calibration factors, and the channel registry
+    built from their channel configurations.
 
     Attributes:
         rack_id: Unique identifier for this rack (e.g., "orange-pi-5-integration").
         description: Human-readable description of the rack.
         instruments: Tuple of instrument configurations.
+        calibration: Hardware calibration factors.
         channel_registry: Registry of logical channel names populated from
             instrument channel configurations.
     """
@@ -113,6 +140,7 @@ class RackConfig:
     rack_id: str
     description: str
     instruments: tuple[InstrumentConfig, ...]
+    calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     channel_registry: ChannelRegistry = field(default_factory=ChannelRegistry)
 
 
@@ -347,6 +375,12 @@ def load_config(path: str | Path) -> RackConfig:
             )
         )
 
+    # Parse calibration section
+    cal_data = data.get("calibration", {})
+    calibration = CalibrationConfig(
+        factors={k: float(v) for k, v in cal_data.items() if isinstance(v, (int, float))}
+    )
+
     # Build the channel registry
     channel_registry = _build_channel_registry(instruments)
 
@@ -354,5 +388,6 @@ def load_config(path: str | Path) -> RackConfig:
         rack_id=rack_id,
         description=description,
         instruments=tuple(instruments),
+        calibration=calibration,
         channel_registry=channel_registry,
     )

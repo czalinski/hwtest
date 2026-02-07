@@ -29,6 +29,7 @@ Example:
 from hwtest_rack.aliaser import AliasMapping, StreamAliaser
 from hwtest_rack.channel import ChannelRegistry, ChannelType, LogicalChannel
 from hwtest_rack.config import (
+    CalibrationConfig,
     ChannelConfig,
     ExpectedIdentity,
     InstrumentConfig,
@@ -41,6 +42,7 @@ from hwtest_rack.rack import Rack
 
 __all__ = [
     # Config
+    "CalibrationConfig",
     "ChannelConfig",
     "ExpectedIdentity",
     "InstrumentConfig",

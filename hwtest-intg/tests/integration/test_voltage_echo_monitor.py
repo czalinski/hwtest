@@ -6,8 +6,12 @@ Supports three modes:
 - HALT: Continuous loop until failure or cancelled
 - HASS: Continuous loop until failure or cancelled
 
-Test parameters are loaded from configs/voltage_echo_monitor.yaml.
-Edit that file to adjust voltages, tolerances, and timing.
+Configuration:
+    Test parameters (states, thresholds, timing) are loaded from:
+        configs/voltage_echo_monitor.yaml
+
+    Hardware configuration (channels, calibration) is loaded from:
+        src/hwtest_intg/configs/pi5_mcc_intg_a_rack.yaml
 
 Hardware Wiring:
     MCC 152 Analog Out 0 → UUT ADS1256 Channel 0
@@ -19,6 +23,7 @@ Environment Variables:
     MCC118_ADDRESS: MCC 118 HAT address (default: 4)
     TEST_MODE: Test mode - 'functional', 'halt', or 'hass' (default: functional)
     TEST_DEFINITION_PATH: Additional paths to search for definition files
+    RACK_CONFIG: Override path to rack configuration file
     TELEMETRY_ENABLED: Enable InfluxDB telemetry logging (default: 0)
     INFLUXDB_URL: InfluxDB URL (default: http://localhost:8086)
     INFLUXDB_ORG: InfluxDB organization (default: hwtest)
@@ -60,6 +65,7 @@ from hwtest_core.types.state import EnvironmentalState, StateTransition
 from hwtest_core.types.streaming import StreamData, StreamField, StreamSchema
 from hwtest_core.types.threshold import BoundType, StateThresholds, Threshold, ThresholdBound
 from hwtest_testcase import TestDefinition, StateDef, load_definition
+from hwtest_rack.config import RackConfig, load_config as load_rack_config
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,12 @@ logger = logging.getLogger(__name__)
 DEFINITION_SEARCH_PATHS = [
     Path(__file__).parent.parent.parent / "configs",  # hwtest-intg/configs
     Path(__file__).parent,  # Same directory as test
+]
+
+# Search paths for rack configuration YAML files
+RACK_CONFIG_SEARCH_PATHS = [
+    Path(__file__).parent.parent.parent / "src" / "hwtest_intg" / "configs",  # hwtest-intg package
+    Path(__file__).parent.parent.parent / "configs",  # hwtest-intg/configs
 ]
 
 
@@ -92,6 +104,7 @@ def get_test_definition() -> TestDefinition:
 # Load definition at module level for use in fixtures
 # This allows the YAML to be the single source of truth
 _definition: TestDefinition | None = None
+_rack_config: RackConfig | None = None
 
 
 def _get_definition() -> TestDefinition:
@@ -101,6 +114,65 @@ def _get_definition() -> TestDefinition:
         _definition = get_test_definition()
         logger.info(f"Loaded test definition from: {_definition.source_path}")
     return _definition
+
+
+def _find_rack_config(rack_id: str) -> Path | None:
+    """Find a rack configuration file by ID.
+
+    Args:
+        rack_id: Rack identifier (e.g., "pi5_mcc_intg_a_rack").
+
+    Returns:
+        Path to the rack config file, or None if not found.
+    """
+    # Check environment variable override
+    env_path = os.environ.get("RACK_CONFIG")
+    if env_path:
+        path = Path(env_path)
+        if path.is_file():
+            return path
+
+    # Search in standard paths
+    filenames = [
+        f"{rack_id}.yaml",
+        f"{rack_id}.yml",
+    ]
+
+    for search_dir in RACK_CONFIG_SEARCH_PATHS:
+        if not search_dir.is_dir():
+            continue
+        for filename in filenames:
+            candidate = search_dir / filename
+            if candidate.is_file():
+                return candidate
+
+    return None
+
+
+def _get_rack_config() -> RackConfig:
+    """Get cached rack configuration.
+
+    Loads the rack config referenced by the test definition.
+    """
+    global _rack_config
+    if _rack_config is None:
+        definition = _get_definition()
+        rack_id = definition.rack_id
+
+        if rack_id is None:
+            raise ValueError("Test definition does not specify a rack reference")
+
+        rack_path = _find_rack_config(rack_id)
+        if rack_path is None:
+            raise FileNotFoundError(
+                f"Rack configuration not found for '{rack_id}'. "
+                f"Set RACK_CONFIG environment variable or add config to search paths."
+            )
+
+        _rack_config = load_rack_config(rack_path)
+        logger.info(f"Loaded rack config from: {rack_path}")
+
+    return _rack_config
 
 
 # =============================================================================
@@ -467,6 +539,12 @@ def test_definition() -> TestDefinition:
 
 
 @pytest.fixture
+def rack_config() -> RackConfig:
+    """Provide the rack configuration loaded from YAML."""
+    return _get_rack_config()
+
+
+@pytest.fixture
 def mcc152_dac() -> Generator[Any, None, None]:
     """Provide an MCC 152 HAT for DAC output."""
     try:
@@ -624,6 +702,7 @@ class TestVoltageEchoMonitor:
         mcc118_adc: Any,
         state: EnvironmentalState,
         definition: TestDefinition,
+        rack_config: RackConfig,
     ) -> VoltageReadings:
         """Run one echo cycle for a given state.
 
@@ -631,8 +710,8 @@ class TestVoltageEchoMonitor:
         """
         target_voltage = state.metadata.get("target_voltage", 0.0)
         settling_time = definition.parameters.settling_time_seconds
-        uut_adc_scale = definition.calibration.uut_adc_scale_factor
-        mcc118_scale = definition.calibration.mcc118_scale_factor
+        uut_adc_scale = rack_config.calibration.get("uut_adc_scale_factor", 1.0)
+        mcc118_scale = rack_config.calibration.get("mcc118_scale_factor", 1.0)
 
         # Step 1: Set output voltage on rack DAC
         mcc152_dac.a_out_write(0, target_voltage)
@@ -696,6 +775,7 @@ class TestVoltageEchoMonitor:
         monitor: VoltageEchoMonitor,
         states: list[EnvironmentalState],
         definition: TestDefinition,
+        rack_config: RackConfig,
         stats: RunStatistics,
         telemetry_logger: Any = None,
     ) -> MonitorResult | None:
@@ -721,7 +801,7 @@ class TestVoltageEchoMonitor:
 
             # Run echo cycle
             readings = await self._run_echo_cycle(
-                uut_client, mcc152_dac, mcc118_adc, state, definition
+                uut_client, mcc152_dac, mcc118_adc, state, definition, rack_config
             )
 
             # Log telemetry
@@ -755,6 +835,7 @@ class TestVoltageEchoMonitor:
         voltage_monitor: VoltageEchoMonitor,
         environmental_states: list[EnvironmentalState],
         test_definition: TestDefinition,
+        rack_config: RackConfig,
         cancellation_token: CancellationToken,
         telemetry_logger: Any,
     ) -> None:
@@ -765,7 +846,8 @@ class TestVoltageEchoMonitor:
         - halt: Continuous until failure or cancelled
         - hass: Continuous until failure or cancelled
 
-        All parameters are loaded from configs/voltage_echo_monitor.yaml.
+        Test parameters are loaded from configs/voltage_echo_monitor.yaml.
+        Hardware calibration is loaded from the rack configuration.
         """
         test_mode = get_execution_mode()
         stats = RunStatistics()
@@ -773,9 +855,14 @@ class TestVoltageEchoMonitor:
 
         logger.info(f"Starting voltage echo monitor test in {test_mode.value.upper()} mode")
         logger.info(f"Definition: {test_definition.source_path}")
+        logger.info(f"Rack: {rack_config.rack_id}")
         logger.info(f"States: {[s.name for s in environmental_states]}")
         logger.info(f"Voltage tolerance: ±{tolerance}V")
         logger.info(f"Settling time: {test_definition.parameters.settling_time_seconds}s")
+        logger.info(
+            f"Calibration: UUT ADC={rack_config.calibration.get('uut_adc_scale_factor', 1.0)}, "
+            f"MCC118={rack_config.calibration.get('mcc118_scale_factor', 1.0)}"
+        )
         if telemetry_logger:
             logger.info("Telemetry logging: ENABLED")
         else:
@@ -791,6 +878,7 @@ class TestVoltageEchoMonitor:
                     voltage_monitor,
                     environmental_states,
                     test_definition,
+                    rack_config,
                     stats,
                     telemetry_logger=telemetry_logger,
                 )
@@ -813,6 +901,7 @@ class TestVoltageEchoMonitor:
                         voltage_monitor,
                         environmental_states,
                         test_definition,
+                        rack_config,
                         stats,
                         telemetry_logger=telemetry_logger,
                     )

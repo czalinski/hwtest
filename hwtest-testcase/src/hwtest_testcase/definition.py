@@ -9,19 +9,21 @@ timing) from the Python test code, enabling:
 - Clear documentation for managers and engineers
 - External configuration sources
 
-Example YAML structure:
+Test case YAML defines test logic (states, thresholds, timing).
+Rack YAML defines hardware specifics (instruments, channels, calibration).
+
+Example test case YAML structure:
 
     test_case:
       id: voltage_echo_monitor
       name: Voltage Echo Monitor Test
       version: "1.0.0"
 
+    rack: pi5_mcc_intg_a_rack  # Reference to rack config
+
     parameters:
       settling_time_seconds: 0.025
       voltage_tolerance: 0.30
-
-    calibration:
-      uut_adc_scale_factor: 2.0
 
     states:
       minimum:
@@ -47,6 +49,9 @@ Usage:
     # Access parameters
     settling_time = definition.parameters.settling_time_seconds
     tolerance = definition.parameters.voltage_tolerance
+
+    # Get rack reference (load rack config separately)
+    rack_id = definition.rack_id  # e.g., "pi5_mcc_intg_a_rack"
 
     # Get state configuration
     state = definition.get_state("minimum")
@@ -182,25 +187,28 @@ class TestCaseInfo:
 class TestDefinition:
     """Complete test case definition loaded from YAML.
 
-    This class represents all the configuration for a test case, including
-    parameters, calibration factors, states, and channel mappings.
+    This class represents the test case configuration including parameters
+    and states. Hardware-specific configuration (channels, calibration) is
+    defined in the rack configuration file referenced by rack_id.
 
     Attributes:
         test_case: Test case metadata.
         parameters: Global test parameters.
-        calibration: Hardware calibration factors.
         states: Map of state IDs to state definitions.
         state_sequence: Ordered list of state definitions for test execution.
-        channels: Map of logical channel names to hardware mappings.
+        rack_id: Reference to the rack configuration (e.g., "pi5_mcc_intg_a_rack").
+        calibration: Hardware calibration factors (deprecated, use rack config).
+        channels: Map of logical channel names (deprecated, use rack config).
         source_path: Path to the YAML file (if loaded from file).
     """
 
     test_case: TestCaseInfo
     parameters: ParametersDef
-    calibration: CalibrationDef
     states: dict[str, StateDef]
     state_sequence: list[StateDef]
-    channels: dict[str, ChannelDef]
+    rack_id: str | None = None
+    calibration: CalibrationDef = field(default_factory=CalibrationDef)
+    channels: dict[str, ChannelDef] = field(default_factory=dict)
     source_path: Path | None = None
 
     def get_state(self, state_id: str) -> StateDef:
@@ -285,6 +293,9 @@ class TestDefinition:
             description=tc_data.get("description", ""),
         )
 
+        # Parse rack reference
+        rack_id = data.get("rack")
+
         # Parse parameters
         param_data = data.get("parameters", {})
         parameters = ParametersDef(
@@ -294,7 +305,7 @@ class TestDefinition:
                    if k not in ("settling_time_seconds", "voltage_tolerance")},
         )
 
-        # Parse calibration
+        # Parse calibration (deprecated - should come from rack config)
         cal_data = data.get("calibration", {})
         calibration = CalibrationDef(
             uut_adc_scale_factor=cal_data.get("uut_adc_scale_factor", 1.0),
@@ -330,7 +341,7 @@ class TestDefinition:
         sequence_ids = data.get("state_sequence", list(states.keys()))
         state_sequence = [states[sid] for sid in sequence_ids if sid in states]
 
-        # Parse channels
+        # Parse channels (deprecated - should come from rack config)
         channels: dict[str, ChannelDef] = {}
         for ch_name, ch_data in data.get("channels", {}).items():
             channels[ch_name] = ChannelDef(
@@ -342,9 +353,10 @@ class TestDefinition:
         return cls(
             test_case=test_case,
             parameters=parameters,
-            calibration=calibration,
             states=states,
             state_sequence=state_sequence,
+            rack_id=rack_id,
+            calibration=calibration,
             channels=channels,
             source_path=source_path,
         )

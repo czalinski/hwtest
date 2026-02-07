@@ -29,6 +29,20 @@ test_case:
     and the test rack verifies the returned voltage is within tolerance.
 
 # =============================================================================
+# Rack Reference
+# =============================================================================
+#
+# The test rack configuration that this test case is designed to run on.
+# The rack config defines:
+#   - Physical instrument configurations
+#   - Logical channel name to hardware mappings
+#   - Calibration factors for hardware-specific scaling
+#
+# Override with RACK_CONFIG environment variable if running on a different rack.
+
+rack: pi5_mcc_intg_a_rack
+
+# =============================================================================
 # Global Parameters
 # =============================================================================
 #
@@ -43,22 +57,6 @@ parameters:
   # This is the acceptable error for the full round-trip measurement
   # Components: DAC accuracy + ADC accuracy + noise + settling
   voltage_tolerance: 0.30  # ±300mV for full round-trip
-
-# =============================================================================
-# Calibration Factors
-# =============================================================================
-#
-# These factors correct for hardware-specific scaling in the signal path.
-# Measure and update these when changing hardware.
-
-calibration:
-  # UUT ADC input has a voltage divider (2:1 ratio on Waveshare AD/DA)
-  # Multiply raw ADC reading by this factor to get actual input voltage
-  uut_adc_scale_factor: 2.0
-
-  # MCC 118 input may have attenuation (depends on wiring)
-  # Multiply raw ADC reading by this factor to get actual voltage
-  mcc118_scale_factor: 1.5
 
 # =============================================================================
 # Environmental States
@@ -119,35 +117,3 @@ state_sequence:
   - minimum
   - middle
   - maximum
-
-# =============================================================================
-# Hardware Mapping
-# =============================================================================
-#
-# Maps logical channel names to physical hardware channels.
-# Update these if hardware configuration changes.
-
-channels:
-  # DAC output on test rack
-  rack_dac:
-    instrument: mcc152
-    channel: 0
-    description: Voltage output to UUT
-
-  # ADC input on test rack (measures echo)
-  rack_adc:
-    instrument: mcc118
-    channel: 0
-    description: Echo voltage measurement
-
-  # ADC input on UUT
-  uut_adc:
-    instrument: ads1256
-    channel: 0
-    description: Input voltage measurement on UUT
-
-  # DAC output on UUT (echoes the voltage)
-  uut_dac:
-    instrument: dac8532
-    channel: 0
-    description: Echo voltage output from UUT
