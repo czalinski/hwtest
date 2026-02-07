@@ -27,6 +27,7 @@ hw = ["daqhats>=1.4"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
     "mypy>=1.0",
     "black>=24.0",
     "pylint>=3.0",

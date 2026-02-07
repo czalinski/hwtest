@@ -1,0 +1,109 @@
+# Root-level configuration for hwtest monorepo
+# This provides shared settings for coverage, pytest, and linting
+
+[tool.coverage.run]
+# Enable branch coverage for more accurate metrics
+branch = true
+
+# Use dynamic contexts to track which test covered each line
+dynamic_context = "test_function"
+
+# Source packages to measure
+source = [
+    "hwtest-core/src",
+    "hwtest-scpi/src",
+    "hwtest-bkprecision/src",
+    "hwtest-mcc/src",
+    "hwtest-waveshare/src",
+    "hwtest-uut/src",
+    "hwtest-rack/src",
+    "hwtest-logger/src",
+    "hwtest-db/src",
+    "hwtest-nats/src",
+    "hwtest-testcase/src",
+    "hwtest-intg/src",
+]
+
+# Files to omit from coverage
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/.venv/*",
+    "*/conftest.py",
+]
+
+# Store coverage data in a dedicated directory
+data_file = "coverage/.coverage"
+
+[tool.coverage.report]
+# Minimum coverage percentage (can adjust as needed)
+# fail_under = 80
+
+# Show missing lines in terminal output
+show_missing = true
+
+# Skip files with no executable code
+skip_empty = true
+
+# Exclude common patterns from coverage
+exclude_lines = [
+    # Have to re-enable the standard pragma
+    "pragma: no cover",
+
+    # Don't complain about abstract methods
+    "@abstractmethod",
+
+    # Don't complain about TYPE_CHECKING blocks
+    "if TYPE_CHECKING:",
+
+    # Don't complain about defensive assertions
+    "raise AssertionError",
+    "raise NotImplementedError",
+
+    # Don't complain about main blocks
+    'if __name__ == "__main__":',
+
+    # Don't complain about protocol stubs
+    "\\.\\.\\.",
+]
+
+[tool.coverage.html]
+# Output directory for HTML reports
+directory = "coverage/html"
+
+# Title for HTML report
+title = "hwtest Coverage Report"
+
+# Show contexts (which tests covered each line)
+show_contexts = true
+
+[tool.coverage.json]
+# Output file for JSON report (used by analysis scripts)
+output = "coverage/coverage.json"
+
+# Include contexts in JSON output
+show_contexts = true
+
+[tool.coverage.xml]
+# Output file for XML report (for CI/CD integration)
+output = "coverage/coverage.xml"
+
+[tool.pytest.ini_options]
+# Test discovery paths
+testpaths = ["tests"]
+
+# Markers for test categorization
+markers = [
+    "uses_mock: Test uses mocking (deferred-integration tests)",
+    "integration: Integration test requiring real hardware",
+    "slow: Slow-running test",
+]
+
+# Default pytest options
+addopts = [
+    "-v",
+    "--tb=short",
+]
+
+# Async mode for pytest-asyncio
+asyncio_mode = "auto"

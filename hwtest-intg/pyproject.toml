@@ -33,6 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "pytest-cov>=4.0",
     "mypy>=1.0",
     "black>=24.0",
     "pylint>=3.0",
