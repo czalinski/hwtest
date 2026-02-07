@@ -23,11 +23,33 @@ Example usage:
 """
 
 from hwtest_testcase.context import TestContext
+from hwtest_testcase.definition import (
+    CalibrationDef,
+    ChannelDef,
+    ParametersDef,
+    StateDef,
+    TestCaseInfo,
+    TestDefinition,
+    ThresholdDef,
+    find_definition_file,
+    load_definition,
+)
 from hwtest_testcase.phase import TestPhase, PhaseResult, PhaseStatus
 from hwtest_testcase.runner import TestRunner
 from hwtest_testcase.testcase import TestCase, TestCaseResult, TestStatus
 
 __all__ = [
+    # Definition loading
+    "CalibrationDef",
+    "ChannelDef",
+    "ParametersDef",
+    "StateDef",
+    "TestCaseInfo",
+    "TestDefinition",
+    "ThresholdDef",
+    "find_definition_file",
+    "load_definition",
+    # Test execution
     "PhaseResult",
     "PhaseStatus",
     "TestCase",

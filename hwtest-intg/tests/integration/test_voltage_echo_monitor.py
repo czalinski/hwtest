@@ -6,12 +6,8 @@ Supports three modes:
 - HALT: Continuous loop until failure or cancelled
 - HASS: Continuous loop until failure or cancelled
 
-Environmental States:
-- MINIMUM: 1.0V target voltage
-- MIDDLE: 2.5V target voltage
-- MAXIMUM: 4.0V target voltage
-
-The monitor fails if the echoed voltage is not within the threshold for the current state.
+Test parameters are loaded from configs/voltage_echo_monitor.yaml.
+Edit that file to adjust voltages, tolerances, and timing.
 
 Hardware Wiring:
     MCC 152 Analog Out 0 → UUT ADS1256 Channel 0
@@ -22,6 +18,7 @@ Environment Variables:
     MCC152_ADDRESS: MCC 152 HAT address (default: 0)
     MCC118_ADDRESS: MCC 118 HAT address (default: 4)
     TEST_MODE: Test mode - 'functional', 'halt', or 'hass' (default: functional)
+    TEST_DEFINITION_PATH: Additional paths to search for definition files
     TELEMETRY_ENABLED: Enable InfluxDB telemetry logging (default: 0)
     INFLUXDB_URL: InfluxDB URL (default: http://localhost:8086)
     INFLUXDB_ORG: InfluxDB organization (default: hwtest)
@@ -52,6 +49,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
 
 import pytest
@@ -61,29 +59,54 @@ from hwtest_core.types.monitor import MonitorResult, MonitorVerdict, ThresholdVi
 from hwtest_core.types.state import EnvironmentalState, StateTransition
 from hwtest_core.types.streaming import StreamData, StreamField, StreamSchema
 from hwtest_core.types.threshold import BoundType, StateThresholds, Threshold, ThresholdBound
+from hwtest_testcase import TestDefinition, StateDef, load_definition
 
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# Configuration
+# Test Definition Loading
 # =============================================================================
 
-# Voltage levels for each state
-VOLTAGE_MINIMUM = 1.0  # V
-VOLTAGE_MIDDLE = 2.5  # V
-VOLTAGE_MAXIMUM = 4.0  # V
+# Search paths for test definition YAML files
+DEFINITION_SEARCH_PATHS = [
+    Path(__file__).parent.parent.parent / "configs",  # hwtest-intg/configs
+    Path(__file__).parent,  # Same directory as test
+]
 
-# Tolerance for voltage matching (±150mV per leg, ×2 for full loop)
-VOLTAGE_TOLERANCE = 0.30  # V (±300mV for full round-trip)
 
-# Calibration factors
-UUT_ADC_SCALE_FACTOR = 2.0  # Input voltage divider on Waveshare AD/DA
-MCC118_SCALE_FACTOR = 1.5  # Attenuation on MCC 118 input
+def get_test_definition() -> TestDefinition:
+    """Load the test definition from YAML.
 
-# Settling time between voltage changes (25ms allows ~10 Hz with HTTP overhead)
-SETTLING_TIME = 0.025  # seconds
+    Returns:
+        TestDefinition with all parameters loaded from YAML.
 
-# Channel ID for the echoed voltage measurement
+    Raises:
+        FileNotFoundError: If definition file not found.
+    """
+    return load_definition(
+        "voltage_echo_monitor",
+        search_paths=DEFINITION_SEARCH_PATHS,
+    )
+
+
+# Load definition at module level for use in fixtures
+# This allows the YAML to be the single source of truth
+_definition: TestDefinition | None = None
+
+
+def _get_definition() -> TestDefinition:
+    """Get cached test definition."""
+    global _definition
+    if _definition is None:
+        _definition = get_test_definition()
+        logger.info(f"Loaded test definition from: {_definition.source_path}")
+    return _definition
+
+
+# =============================================================================
+# Channel ID for monitoring
+# =============================================================================
+
 ECHO_VOLTAGE_CHANNEL = ChannelId("echo_voltage")
 
 
@@ -117,9 +140,7 @@ def get_uut_id() -> str:
     uut_id = os.environ.get("UUT_ID")
     if uut_id:
         return uut_id
-    # Extract from UUT_URL if set
     uut_url = os.environ.get("UUT_URL", "localhost")
-    # Use hostname/IP as identifier
     if "://" in uut_url:
         uut_url = uut_url.split("://")[1]
     return uut_url.split(":")[0].replace(".", "-")
@@ -184,32 +205,25 @@ def get_execution_mode() -> ExecutionMode:
 
 
 # =============================================================================
-# Environmental States
+# Environmental States (from YAML definition)
 # =============================================================================
 
-STATE_MINIMUM = EnvironmentalState(
-    state_id=StateId("minimum"),
-    name="Minimum",
-    description=f"Minimum voltage level ({VOLTAGE_MINIMUM}V)",
-    metadata={"target_voltage": VOLTAGE_MINIMUM},
-)
 
-STATE_MIDDLE = EnvironmentalState(
-    state_id=StateId("middle"),
-    name="Middle",
-    description=f"Middle voltage level ({VOLTAGE_MIDDLE}V)",
-    metadata={"target_voltage": VOLTAGE_MIDDLE},
-)
+def create_environmental_state(state_def: StateDef) -> EnvironmentalState:
+    """Create an EnvironmentalState from a StateDef.
 
-STATE_MAXIMUM = EnvironmentalState(
-    state_id=StateId("maximum"),
-    name="Maximum",
-    description=f"Maximum voltage level ({VOLTAGE_MAXIMUM}V)",
-    metadata={"target_voltage": VOLTAGE_MAXIMUM},
-)
+    Args:
+        state_def: State definition from YAML.
 
-# Ordered list of states for cycling
-STATES = [STATE_MINIMUM, STATE_MIDDLE, STATE_MAXIMUM]
+    Returns:
+        EnvironmentalState for use with monitoring.
+    """
+    return EnvironmentalState(
+        state_id=StateId(state_def.id),
+        name=state_def.name,
+        description=state_def.description or f"{state_def.name} ({state_def.target_voltage}V)",
+        metadata={"target_voltage": state_def.target_voltage, **state_def.metadata},
+    )
 
 
 def create_transition_state(
@@ -218,7 +232,7 @@ def create_transition_state(
     """Create a transition state between two environmental states."""
     return EnvironmentalState(
         state_id=StateId(f"transition_{from_state.state_id}_to_{to_state.state_id}"),
-        name=f"Transition",
+        name="Transition",
         description=f"Transitioning from {from_state.name} to {to_state.name}",
         is_transition=True,
         metadata={
@@ -229,47 +243,37 @@ def create_transition_state(
 
 
 # =============================================================================
-# State Thresholds
+# State Thresholds (from YAML definition)
 # =============================================================================
 
 
-def create_voltage_threshold(target_voltage: float, tolerance: float) -> Threshold:
-    """Create a threshold for voltage measurement."""
-    return Threshold(
-        channel=ECHO_VOLTAGE_CHANNEL,
-        low=ThresholdBound(value=target_voltage - tolerance, bound_type=BoundType.INCLUSIVE),
-        high=ThresholdBound(value=target_voltage + tolerance, bound_type=BoundType.INCLUSIVE),
+def create_state_thresholds(state_def: StateDef) -> StateThresholds:
+    """Create StateThresholds from a StateDef.
+
+    Args:
+        state_def: State definition from YAML with threshold bounds.
+
+    Returns:
+        StateThresholds for monitoring.
+    """
+    thresholds: dict[ChannelId, Threshold] = {}
+
+    echo_thresh = state_def.thresholds.get("echo_voltage")
+    if echo_thresh is not None:
+        thresholds[ECHO_VOLTAGE_CHANNEL] = Threshold(
+            channel=ECHO_VOLTAGE_CHANNEL,
+            low=ThresholdBound(value=echo_thresh.low, bound_type=BoundType.INCLUSIVE)
+            if echo_thresh.low is not None
+            else None,
+            high=ThresholdBound(value=echo_thresh.high, bound_type=BoundType.INCLUSIVE)
+            if echo_thresh.high is not None
+            else None,
+        )
+
+    return StateThresholds(
+        state_id=StateId(state_def.id),
+        thresholds=thresholds,
     )
-
-
-# Thresholds for each state
-THRESHOLDS_MINIMUM = StateThresholds(
-    state_id=STATE_MINIMUM.state_id,
-    thresholds={
-        ECHO_VOLTAGE_CHANNEL: create_voltage_threshold(VOLTAGE_MINIMUM, VOLTAGE_TOLERANCE),
-    },
-)
-
-THRESHOLDS_MIDDLE = StateThresholds(
-    state_id=STATE_MIDDLE.state_id,
-    thresholds={
-        ECHO_VOLTAGE_CHANNEL: create_voltage_threshold(VOLTAGE_MIDDLE, VOLTAGE_TOLERANCE),
-    },
-)
-
-THRESHOLDS_MAXIMUM = StateThresholds(
-    state_id=STATE_MAXIMUM.state_id,
-    thresholds={
-        ECHO_VOLTAGE_CHANNEL: create_voltage_threshold(VOLTAGE_MAXIMUM, VOLTAGE_TOLERANCE),
-    },
-)
-
-# Map state IDs to thresholds
-STATE_THRESHOLDS: dict[StateId, StateThresholds] = {
-    STATE_MINIMUM.state_id: THRESHOLDS_MINIMUM,
-    STATE_MIDDLE.state_id: THRESHOLDS_MIDDLE,
-    STATE_MAXIMUM.state_id: THRESHOLDS_MAXIMUM,
-}
 
 
 # =============================================================================
@@ -285,6 +289,7 @@ class VoltageEchoMonitor:
     matches the expected voltage for the current environmental state.
     """
 
+    state_thresholds: dict[StateId, StateThresholds]
     monitor_id: MonitorId = MonitorId("voltage_echo_monitor")
 
     def evaluate(
@@ -314,7 +319,7 @@ class VoltageEchoMonitor:
             )
 
         # Get thresholds for current state
-        thresholds = STATE_THRESHOLDS.get(state.state_id)
+        thresholds = self.state_thresholds.get(state.state_id)
         if thresholds is None:
             return MonitorResult(
                 monitor_id=self.monitor_id,
@@ -456,6 +461,12 @@ def get_mcc118_address() -> int:
 
 
 @pytest.fixture
+def test_definition() -> TestDefinition:
+    """Provide the test definition loaded from YAML."""
+    return _get_definition()
+
+
+@pytest.fixture
 def mcc152_dac() -> Generator[Any, None, None]:
     """Provide an MCC 152 HAT for DAC output."""
     try:
@@ -499,9 +510,21 @@ def mcc118_adc() -> Generator[Any, None, None]:
 
 
 @pytest.fixture
-def voltage_monitor() -> VoltageEchoMonitor:
-    """Provide a voltage echo monitor."""
-    return VoltageEchoMonitor()
+def voltage_monitor(test_definition: TestDefinition) -> VoltageEchoMonitor:
+    """Provide a voltage echo monitor with thresholds from YAML."""
+    state_thresholds: dict[StateId, StateThresholds] = {}
+
+    for state_def in test_definition.state_sequence:
+        state_id = StateId(state_def.id)
+        state_thresholds[state_id] = create_state_thresholds(state_def)
+
+    return VoltageEchoMonitor(state_thresholds=state_thresholds)
+
+
+@pytest.fixture
+def environmental_states(test_definition: TestDefinition) -> list[EnvironmentalState]:
+    """Provide environmental states from YAML definition."""
+    return [create_environmental_state(s) for s in test_definition.state_sequence]
 
 
 @pytest.fixture
@@ -590,6 +613,8 @@ class TestVoltageEchoMonitor:
     - Functional: Single pass through all states
     - HALT: Continuous loop until failure or cancelled
     - HASS: Continuous loop until failure or cancelled
+
+    All parameters are loaded from configs/voltage_echo_monitor.yaml.
     """
 
     async def _run_echo_cycle(
@@ -598,31 +623,35 @@ class TestVoltageEchoMonitor:
         mcc152_dac: Any,
         mcc118_adc: Any,
         state: EnvironmentalState,
+        definition: TestDefinition,
     ) -> VoltageReadings:
         """Run one echo cycle for a given state.
 
         Returns all voltage readings from the echo loop.
         """
         target_voltage = state.metadata.get("target_voltage", 0.0)
+        settling_time = definition.parameters.settling_time_seconds
+        uut_adc_scale = definition.calibration.uut_adc_scale_factor
+        mcc118_scale = definition.calibration.mcc118_scale_factor
 
         # Step 1: Set output voltage on rack DAC
         mcc152_dac.a_out_write(0, target_voltage)
         logger.debug(f"Set MCC 152 DAC to {target_voltage}V")
-        time.sleep(SETTLING_TIME)
+        time.sleep(settling_time)
 
         # Step 2: Read voltage on UUT ADC (apply calibration)
         uut_adc_raw = await uut_client.adc_read(0)
-        uut_adc_voltage = uut_adc_raw * UUT_ADC_SCALE_FACTOR
+        uut_adc_voltage = uut_adc_raw * uut_adc_scale
         logger.debug(f"UUT ADC read: {uut_adc_raw}V (calibrated: {uut_adc_voltage}V)")
 
         # Step 3: Write calibrated voltage to UUT DAC (echo)
         await uut_client.dac_write(0, uut_adc_voltage)
         logger.debug(f"UUT DAC write: {uut_adc_voltage}V")
-        time.sleep(SETTLING_TIME)
+        time.sleep(settling_time)
 
         # Step 4: Read echoed voltage on rack ADC (apply calibration)
         rack_adc_raw = mcc118_adc.a_in_read(0)
-        measured_voltage = rack_adc_raw * MCC118_SCALE_FACTOR
+        measured_voltage = rack_adc_raw * mcc118_scale
         logger.debug(f"MCC 118 ADC read: {rack_adc_raw}V (calibrated: {measured_voltage}V)")
 
         return VoltageReadings(
@@ -665,6 +694,8 @@ class TestVoltageEchoMonitor:
         mcc152_dac: Any,
         mcc118_adc: Any,
         monitor: VoltageEchoMonitor,
+        states: list[EnvironmentalState],
+        definition: TestDefinition,
         stats: RunStatistics,
         telemetry_logger: Any = None,
     ) -> MonitorResult | None:
@@ -672,10 +703,10 @@ class TestVoltageEchoMonitor:
 
         Returns the first failing result, or None if all passed.
         """
-        for i, state in enumerate(STATES):
+        for i, state in enumerate(states):
             # Log state transition
             if i > 0:
-                prev_state = STATES[i - 1]
+                prev_state = states[i - 1]
                 transition = StateTransition(
                     from_state=prev_state.state_id,
                     to_state=state.state_id,
@@ -689,7 +720,9 @@ class TestVoltageEchoMonitor:
             )
 
             # Run echo cycle
-            readings = await self._run_echo_cycle(uut_client, mcc152_dac, mcc118_adc, state)
+            readings = await self._run_echo_cycle(
+                uut_client, mcc152_dac, mcc118_adc, state, definition
+            )
 
             # Log telemetry
             await self._log_telemetry(telemetry_logger, readings)
@@ -720,6 +753,8 @@ class TestVoltageEchoMonitor:
         mcc152_dac: Any,
         mcc118_adc: Any,
         voltage_monitor: VoltageEchoMonitor,
+        environmental_states: list[EnvironmentalState],
+        test_definition: TestDefinition,
         cancellation_token: CancellationToken,
         telemetry_logger: Any,
     ) -> None:
@@ -730,15 +765,17 @@ class TestVoltageEchoMonitor:
         - halt: Continuous until failure or cancelled
         - hass: Continuous until failure or cancelled
 
-        Telemetry logging is enabled with TELEMETRY_ENABLED=1 and requires
-        INFLUXDB_TOKEN to be set.
+        All parameters are loaded from configs/voltage_echo_monitor.yaml.
         """
         test_mode = get_execution_mode()
         stats = RunStatistics()
+        tolerance = test_definition.parameters.voltage_tolerance
 
         logger.info(f"Starting voltage echo monitor test in {test_mode.value.upper()} mode")
-        logger.info(f"States: {[s.name for s in STATES]}")
-        logger.info(f"Voltage tolerance: ±{VOLTAGE_TOLERANCE}V")
+        logger.info(f"Definition: {test_definition.source_path}")
+        logger.info(f"States: {[s.name for s in environmental_states]}")
+        logger.info(f"Voltage tolerance: ±{tolerance}V")
+        logger.info(f"Settling time: {test_definition.parameters.settling_time_seconds}s")
         if telemetry_logger:
             logger.info("Telemetry logging: ENABLED")
         else:
@@ -752,6 +789,8 @@ class TestVoltageEchoMonitor:
                     mcc152_dac,
                     mcc118_adc,
                     voltage_monitor,
+                    environmental_states,
+                    test_definition,
                     stats,
                     telemetry_logger=telemetry_logger,
                 )
@@ -772,6 +811,8 @@ class TestVoltageEchoMonitor:
                         mcc152_dac,
                         mcc118_adc,
                         voltage_monitor,
+                        environmental_states,
+                        test_definition,
                         stats,
                         telemetry_logger=telemetry_logger,
                     )

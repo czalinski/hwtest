@@ -1,0 +1,153 @@
+# =============================================================================
+# Voltage Echo Monitor Test Definition
+# =============================================================================
+#
+# This file defines the parameters and environmental states for the voltage
+# echo monitor test. It is the source of truth for test configuration and
+# should be reviewed by the team (managers, EEs, test developers) when
+# requirements change.
+#
+# Changes to this file do not require Python code review - they only affect
+# test parameters.
+#
+# Hardware Setup:
+#   Test Rack (Pi 5):     MCC 152 DAC → ... → MCC 118 ADC
+#   UUT Simulator (Pi 4): ADS1256 ADC → DAC8532 DAC
+#
+# Signal Path:
+#   MCC 152 Analog Out 0 → UUT ADS1256 Channel 0 → UUT DAC8532 Channel 0 → MCC 118 Channel 0
+#
+# =============================================================================
+
+test_case:
+  id: voltage_echo_monitor
+  name: Voltage Echo Monitor Test
+  version: "1.0.0"
+  description: |
+    Tests analog voltage echo loop through UUT ADC/DAC with state-based monitoring.
+    The test rack outputs a target voltage, the UUT reads and echoes it back,
+    and the test rack verifies the returned voltage is within tolerance.
+
+# =============================================================================
+# Global Parameters
+# =============================================================================
+#
+# These parameters apply to all states unless overridden.
+
+parameters:
+  # Time to wait after voltage changes for signals to settle
+  # Increase if seeing intermittent failures due to timing
+  settling_time_seconds: 0.025  # 25ms allows ~10 Hz with HTTP overhead
+
+  # Default voltage tolerance (±V)
+  # This is the acceptable error for the full round-trip measurement
+  # Components: DAC accuracy + ADC accuracy + noise + settling
+  voltage_tolerance: 0.30  # ±300mV for full round-trip
+
+# =============================================================================
+# Calibration Factors
+# =============================================================================
+#
+# These factors correct for hardware-specific scaling in the signal path.
+# Measure and update these when changing hardware.
+
+calibration:
+  # UUT ADC input has a voltage divider (2:1 ratio on Waveshare AD/DA)
+  # Multiply raw ADC reading by this factor to get actual input voltage
+  uut_adc_scale_factor: 2.0
+
+  # MCC 118 input may have attenuation (depends on wiring)
+  # Multiply raw ADC reading by this factor to get actual voltage
+  mcc118_scale_factor: 1.5
+
+# =============================================================================
+# Environmental States
+# =============================================================================
+#
+# Each state defines a test condition with specific voltage targets and
+# pass/fail thresholds. States are executed in the order listed in
+# state_sequence below.
+#
+# For each state:
+#   - target_voltage: The voltage the test rack DAC will output
+#   - thresholds: Pass/fail bounds for the measured echo voltage
+#
+# Threshold values are typically: target_voltage ± voltage_tolerance
+# but can be customized per state if needed.
+
+states:
+  minimum:
+    name: Minimum Voltage
+    description: Lowest voltage in the test range
+    target_voltage: 1.0  # V
+
+    # Thresholds for this state
+    # measured voltage must be within [low, high] to pass
+    thresholds:
+      echo_voltage:
+        low: 0.70   # V (target - tolerance)
+        high: 1.30  # V (target + tolerance)
+
+  middle:
+    name: Middle Voltage
+    description: Mid-point voltage in the test range
+    target_voltage: 2.5  # V
+
+    thresholds:
+      echo_voltage:
+        low: 2.20   # V
+        high: 2.80  # V
+
+  maximum:
+    name: Maximum Voltage
+    description: Highest voltage in the test range
+    target_voltage: 4.0  # V
+
+    thresholds:
+      echo_voltage:
+        low: 3.70   # V
+        high: 4.30  # V
+
+# =============================================================================
+# State Sequence
+# =============================================================================
+#
+# Order in which states are executed during each test cycle.
+# In HALT/HASS mode, this sequence repeats until failure or cancellation.
+
+state_sequence:
+  - minimum
+  - middle
+  - maximum
+
+# =============================================================================
+# Hardware Mapping
+# =============================================================================
+#
+# Maps logical channel names to physical hardware channels.
+# Update these if hardware configuration changes.
+
+channels:
+  # DAC output on test rack
+  rack_dac:
+    instrument: mcc152
+    channel: 0
+    description: Voltage output to UUT
+
+  # ADC input on test rack (measures echo)
+  rack_adc:
+    instrument: mcc118
+    channel: 0
+    description: Echo voltage measurement
+
+  # ADC input on UUT
+  uut_adc:
+    instrument: ads1256
+    channel: 0
+    description: Input voltage measurement on UUT
+
+  # DAC output on UUT (echoes the voltage)
+  uut_dac:
+    instrument: dac8532
+    channel: 0
+    description: Echo voltage output from UUT
