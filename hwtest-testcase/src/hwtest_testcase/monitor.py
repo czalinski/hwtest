@@ -65,6 +65,10 @@ class Monitor:
     and what bounds apply in each state. Similar to how loggers work, this class
     is generic and can handle any fields defined in the configuration.
 
+    Monitors can be either system monitors or UUT monitors:
+    - System monitors (kwargs:) detect test system failures
+    - UUT monitors (kwargs.N:) detect UUT failures for slot N
+
     Attributes:
         monitor_def: The monitor definition from YAML with bounds configuration.
         monitor_id: Unique identifier for this monitor (defaults to monitor_def.name).
@@ -77,6 +81,40 @@ class Monitor:
         """Set default monitor_id from monitor_def.name if not provided."""
         if self.monitor_id is None:
             object.__setattr__(self, "monitor_id", MonitorId(self.monitor_def.name))
+
+    @property
+    def is_uut_monitor(self) -> bool:
+        """Check if this is a UUT monitor (associated with a slot).
+
+        UUT monitors detect failures in the Unit Under Test. When a UUT monitor
+        fails, the UUT in the associated slot is considered bad.
+
+        Returns:
+            True if this monitor detects UUT failures.
+        """
+        return self.monitor_def.is_uut_monitor
+
+    @property
+    def is_system_monitor(self) -> bool:
+        """Check if this is a system monitor (no slot association).
+
+        System monitors detect failures in the test system itself. When a system
+        monitor fails, you cannot know for certain if the UUT was OK because the
+        measurement or test infrastructure failed.
+
+        Returns:
+            True if this monitor detects test system failures.
+        """
+        return self.monitor_def.is_system_monitor
+
+    @property
+    def slot_number(self) -> int | None:
+        """Get the UUT slot number for this monitor.
+
+        Returns:
+            The slot number for UUT monitors, or None for system monitors.
+        """
+        return self.monitor_def.slot_number
 
     def evaluate(
         self,

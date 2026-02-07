@@ -101,12 +101,17 @@ state_sequence:
 #   greater_than: value                - value > threshold
 #   good_values: [list]                - value in discrete set
 #   special: any                       - always pass (no check)
+#
+# Monitor error classification:
+#   kwargs:    - System monitor (errors indicate test system failure)
+#   kwargs.N:  - UUT monitor for slot N (errors indicate UUT failure)
 
 monitors:
   echo_voltage_monitor:
     module: hwtest_testcase
     class: Monitor
-    kwargs:
+    # UUT monitor for slot 0 - failures indicate the UUT is bad
+    kwargs.0:
       channel: echo_voltage
     configuration:
       # Default bounds if a state doesn't specify (use 'special: any' to skip)

@@ -192,12 +192,17 @@ class BoundSpec:
 class MonitorDef:
     """Definition for a monitor loaded from YAML.
 
+    Monitors can be either system monitors or UUT monitors:
+    - System monitors (kwargs:) detect test system failures
+    - UUT monitors (kwargs.N:) detect UUT failures for slot N
+
     Attributes:
         name: Monitor name (key in the monitors dict).
         module: Python module containing the monitor class.
         class_name: Name of the monitor class.
         kwargs: Arguments passed to monitor constructor.
         configuration: Per-state bounds for each field.
+        slot_number: UUT slot number (None for system monitors).
     """
 
     name: str
@@ -205,6 +210,25 @@ class MonitorDef:
     class_name: str
     kwargs: dict[str, Any] = field(default_factory=dict)
     configuration: dict[str, dict[str, BoundSpec]] = field(default_factory=dict)
+    slot_number: int | None = None
+
+    @property
+    def is_uut_monitor(self) -> bool:
+        """Check if this is a UUT monitor (associated with a slot).
+
+        Returns:
+            True if this monitor detects UUT failures.
+        """
+        return self.slot_number is not None
+
+    @property
+    def is_system_monitor(self) -> bool:
+        """Check if this is a system monitor (no slot association).
+
+        Returns:
+            True if this monitor detects test system failures.
+        """
+        return self.slot_number is None
 
     def get_bounds(self, state_id: str, field_name: str) -> BoundSpec | None:
         """Get bounds for a field in a specific state.
@@ -470,12 +494,31 @@ class TestDefinition:
                     field_bounds[field_name] = BoundSpec.from_dict(bound_data)
                 configuration[state_id] = field_bounds
 
+            # Parse kwargs - look for "kwargs" or "kwargs.N" pattern
+            # "kwargs" = system monitor, "kwargs.N" = UUT monitor for slot N
+            kwargs: dict[str, Any] = {}
+            slot_number: int | None = None
+
+            for key in monitor_data.keys():
+                if key == "kwargs":
+                    kwargs = dict(monitor_data[key] or {})
+                    break
+                elif key.startswith("kwargs."):
+                    try:
+                        slot_number = int(key.split(".", 1)[1])
+                        kwargs = dict(monitor_data[key] or {})
+                        break
+                    except (ValueError, IndexError):
+                        # Invalid slot number format, skip
+                        pass
+
             monitors[monitor_name] = MonitorDef(
                 name=monitor_name,
                 module=monitor_data.get("module", ""),
                 class_name=monitor_data.get("class", ""),
-                kwargs=dict(monitor_data.get("kwargs", {})),
+                kwargs=kwargs,
                 configuration=configuration,
+                slot_number=slot_number,
             )
 
         # Parse functional requirements (optional)

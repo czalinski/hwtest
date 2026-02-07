@@ -249,3 +249,108 @@ The system should track latency metrics for diagnostics:
 - Publish-to-receive latency per message
 - 95th/99th percentile latencies over time windows
 - Alerts when latency exceeds thresholds
+
+## Monitor Error Classification
+
+Monitors detect two distinct types of errors that require different handling:
+
+### UUT Errors
+
+A **UUT error** indicates that the Unit Under Test has failed. The UUT is bad and should be rejected or flagged for further analysis. UUT errors are the primary output of HASS/HALT testing.
+
+Examples:
+- Voltage output from UUT outside acceptable range
+- UUT communication failure
+- UUT functional test failure
+
+### System Errors
+
+A **system error** indicates that something went wrong with the test system itself. When a system error occurs, you cannot know for certain if the UUT was OK because the measurement or test infrastructure failed.
+
+Examples:
+- Test rack instrument communication failure
+- Environmental chamber malfunction
+- Telemetry server connection lost
+- Calibration reference out of range
+
+### Error Classification in YAML
+
+Monitors specify their error type through the `kwargs` key in YAML configuration:
+
+```yaml
+monitors:
+  # System monitor - errors indicate test system problems
+  rack_temperature_monitor:
+    module: hwtest_testcase
+    class: Monitor
+    kwargs:
+      channel: rack_temp
+    configuration:
+      default:
+        rack_temp:
+          good_interval: [20.0, 30.0]
+
+  # UUT monitor for slot 3 - errors indicate UUT failure
+  uut_voltage_monitor:
+    module: hwtest_testcase
+    class: Monitor
+    kwargs.3:
+      channel: uut_voltage_slot3
+    configuration:
+      default:
+        uut_voltage_slot3:
+          within_range: [3.3, 0.1]
+```
+
+The convention:
+- `kwargs:` - System monitor (no slot association)
+- `kwargs.N:` - UUT monitor for slot N (where N is the slot number)
+
+### Multi-Slot UUT Testing
+
+Test racks may support simultaneous testing of multiple UUTs in different slots. Each slot has its own set of channels and monitors, but shares the same bounds and test parameters.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Test Rack                                       │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐   │
+│  │   Slot 0    │    │   Slot 1    │    │   Slot 2    │    │   Slot 3    │   │
+│  │    UUT A    │    │    UUT B    │    │   (empty)   │    │    UUT C    │   │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘   │
+│        │                  │                                     │            │
+│        ▼                  ▼                                     ▼            │
+│  ┌─────────────┐    ┌─────────────┐                       ┌─────────────┐   │
+│  │ Monitor.0   │    │ Monitor.1   │                       │ Monitor.3   │   │
+│  │ kwargs.0:   │    │ kwargs.1:   │                       │ kwargs.3:   │   │
+│  │ channel: x0 │    │ channel: x1 │                       │ channel: x3 │   │
+│  └─────────────┘    └─────────────┘                       └─────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+Benefits of this design:
+- Same test definition YAML works for any slot
+- Bounds are defined once, channels vary per slot
+- Clear attribution of failures to specific UUT slots
+- Test results database can track per-slot outcomes
+
+### Monitor Query Interface
+
+The `Monitor` class exposes properties to query error classification:
+
+```python
+monitor = Monitor(monitor_def)
+
+if monitor.is_uut_monitor:
+    print(f"UUT monitor for slot {monitor.slot_number}")
+else:
+    print("System monitor")
+
+# When a failure occurs:
+result = monitor.evaluate(values, state)
+if result.failed:
+    if monitor.is_uut_monitor:
+        log_uut_failure(slot=monitor.slot_number, result=result)
+    else:
+        log_system_failure(result=result)
+        abort_test()  # Cannot trust UUT results
+```
