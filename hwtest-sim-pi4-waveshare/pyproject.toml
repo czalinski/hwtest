@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hwtest-uut"
+name = "hwtest-sim-pi4-waveshare"
 version = "0.1.0"
-description = "UUT (Unit Under Test) simulator for hwtest integration testing"
+description = "Pi 4 + Waveshare AD/DA simulator for hwtest integration testing"
 requires-python = ">=3.10"
 license = {text = "Unlicense"}
 classifiers = [
@@ -41,7 +41,7 @@ dev = [
 ]
 
 [project.scripts]
-uut-simulator = "hwtest_uut.server:main"
+pi4-waveshare-sim = "hwtest_sim_pi4_waveshare.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -62,7 +62,7 @@ module = ["fastapi", "fastapi.responses", "uvicorn", "can", "smbus2"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "hwtest_uut.server"
+module = "hwtest_sim_pi4_waveshare.server"
 disallow_untyped_decorators = false
 
 [tool.black]

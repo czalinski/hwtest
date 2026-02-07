@@ -29,8 +29,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from hwtest_uut.can_interface import CanConfig, CanInterface, CanMessage
-from hwtest_uut.mcp23017 import Mcp23017, Mcp23017Config, PinDirection
+from hwtest_sim_pi4_waveshare.can_interface import CanConfig, CanInterface, CanMessage
+from hwtest_sim_pi4_waveshare.mcp23017 import Mcp23017, Mcp23017Config, PinDirection
 
 logger = logging.getLogger(__name__)
 

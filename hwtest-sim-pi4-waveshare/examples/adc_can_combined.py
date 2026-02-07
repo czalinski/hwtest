@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import time
 
-from hwtest_uut import (
+from hwtest_sim_pi4_waveshare import (
     Ads1263,
     Ads1263Config,
     Ads1263Gain,

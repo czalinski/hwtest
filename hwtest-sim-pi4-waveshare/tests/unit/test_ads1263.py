@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
-from hwtest_uut.ads1263 import (
+from hwtest_sim_pi4_waveshare.ads1263 import (
     Ads1263,
     Ads1263Config,
     Ads1263DataRate,

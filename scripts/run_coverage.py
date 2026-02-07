@@ -43,7 +43,7 @@ PACKAGES = [
     "hwtest-bkprecision",
     "hwtest-mcc",
     "hwtest-waveshare",
-    "hwtest-uut",
+    "hwtest-sim-pi4-waveshare",
     "hwtest-rack",
     "hwtest-logger",
     "hwtest-db",

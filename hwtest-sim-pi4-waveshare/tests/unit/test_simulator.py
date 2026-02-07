@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hwtest_uut.mcp23017 import PinDirection
-from hwtest_uut.simulator import SimulatorConfig, UutSimulator
+from hwtest_sim_pi4_waveshare.mcp23017 import PinDirection
+from hwtest_sim_pi4_waveshare.simulator import SimulatorConfig, UutSimulator
 
 
 def _create_mock_can_bus() -> MagicMock:
@@ -136,7 +136,7 @@ class TestUutSimulator:
         sim = UutSimulator(config=config)
         sim.start()
 
-        from hwtest_uut.can_interface import CanMessage
+        from hwtest_sim_pi4_waveshare.can_interface import CanMessage
 
         with pytest.raises(RuntimeError, match="CAN interface not available"):
             sim.can_send(CanMessage(arbitration_id=0x100))
@@ -154,7 +154,7 @@ class TestUutSimulator:
         sim = UutSimulator(config=config, can_bus=mock_bus)
         sim.start()
 
-        from hwtest_uut.can_interface import CanMessage
+        from hwtest_sim_pi4_waveshare.can_interface import CanMessage
 
         msg = CanMessage(arbitration_id=0x100, data=b"\x01\x02")
         sim.can_send(msg)

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hwtest_uut.mcp23017 import Mcp23017, Mcp23017Config, Mcp23017Register, PinDirection
+from hwtest_sim_pi4_waveshare.mcp23017 import Mcp23017, Mcp23017Config, Mcp23017Register, PinDirection
 
 
 def _create_mock_bus() -> MagicMock:

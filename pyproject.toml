@@ -15,7 +15,7 @@ source = [
     "hwtest-bkprecision/src",
     "hwtest-mcc/src",
     "hwtest-waveshare/src",
-    "hwtest-uut/src",
+    "hwtest-sim-pi4-waveshare/src",
     "hwtest-rack/src",
     "hwtest-logger/src",
     "hwtest-db/src",

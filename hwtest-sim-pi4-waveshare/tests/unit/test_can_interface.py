@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hwtest_uut.can_interface import CanConfig, CanInterface, CanMessage
+from hwtest_sim_pi4_waveshare.can_interface import CanConfig, CanInterface, CanMessage
 
 
 def _create_mock_bus() -> MagicMock:

@@ -14,7 +14,7 @@ Example:
 
     Programmatic usage::
 
-        >>> from hwtest_uut.server import app
+        >>> from hwtest_sim_pi4_waveshare.server import app
         >>> import uvicorn
         >>> uvicorn.run(app, host="0.0.0.0", port=8080)
 """
@@ -31,9 +31,9 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
-from hwtest_uut.can_interface import CanMessage
-from hwtest_uut.mcp23017 import PinDirection
-from hwtest_uut.models import (
+from hwtest_sim_pi4_waveshare.can_interface import CanMessage
+from hwtest_sim_pi4_waveshare.mcp23017 import PinDirection
+from hwtest_sim_pi4_waveshare.models import (
     AdcChannelResponse,
     AdcStatusResponse,
     CanEchoConfig,
@@ -57,7 +57,7 @@ from hwtest_uut.models import (
     HealthResponse,
     StatusResponse,
 )
-from hwtest_uut.simulator import SimulatorConfig, UutSimulator
+from hwtest_sim_pi4_waveshare.simulator import SimulatorConfig, UutSimulator
 
 logger = logging.getLogger(__name__)
 

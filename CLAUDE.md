@@ -14,7 +14,7 @@ Each package has its own directory. Use a shared venv or per-package venvs. Exam
 # Setup (shared venv)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-uut[dev]" -e "./hwtest-logger[dev]" -e "./hwtest-db[dev]" -e "./hwtest-nats[dev]" -e "./hwtest-intg[dev]"
+pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-sim-pi4-waveshare[dev]" -e "./hwtest-logger[dev]" -e "./hwtest-db[dev]" -e "./hwtest-nats[dev]" -e "./hwtest-intg[dev]"
 
 # Testing (run from each package directory)
 cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
@@ -23,7 +23,7 @@ cd hwtest-bkprecision && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-mcc && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-waveshare && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-rack && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-uut && python3 -m pytest tests/unit/ -v && cd ..
+cd hwtest-sim-pi4-waveshare && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-logger && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-db && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-nats && python3 -m pytest tests/unit/ -v && cd ..
@@ -58,7 +58,7 @@ hwtest-core  (stdlib-only, no external deps)
   │     └── hwtest-bkprecision  (depends on hwtest-scpi)
   ├── hwtest-mcc  (depends on hwtest-core; optional daqhats)
   ├── hwtest-waveshare  (depends on hwtest-core; optional spidev, lgpio)
-  │     └── hwtest-uut  (depends on hwtest-waveshare; fastapi, uvicorn, python-can, smbus2)
+  │     └── hwtest-sim-pi4-waveshare  (depends on hwtest-waveshare; fastapi, uvicorn, python-can, smbus2)
   ├── hwtest-rack  (depends on hwtest-core; fastapi, uvicorn, pyyaml)
   ├── hwtest-logger  (depends on hwtest-core; optional influxdb-client)
   ├── hwtest-db  (aiosqlite; test results persistence)
@@ -144,9 +144,9 @@ Drivers for Waveshare HAT boards (Raspberry Pi 5 compatible via lgpio):
 
 All Waveshare drivers implement `get_identity()` returning `InstrumentIdentity` with manufacturer="Waveshare".
 
-### UUT Simulator (hwtest-uut)
+### Pi 4 Waveshare Simulator (hwtest-sim-pi4-waveshare)
 
-Simulated Unit Under Test for integration testing. Supports Raspberry Pi 4 (recommended) or Pi Zero:
+Hardware simulator for integration testing. Runs on Raspberry Pi 4 (recommended) or Pi Zero with Waveshare AD/DA board:
 
 - **CAN Interface** (`can_interface.py`): SocketCAN wrapper with async support
   - `CanInterface`: Send/receive CAN messages via python-can
@@ -197,14 +197,14 @@ Simulated Unit Under Test for integration testing. Supports Raspberry Pi 4 (reco
   - `POST /gpio/write`: Write pin value
   - `GET /gpio/{pin}`: Read pin value
 
-Run the UUT simulator:
+Run the simulator:
 ```bash
-uut-simulator --port 8080
+pi4-waveshare-sim --port 8080
 # Or with options:
-uut-simulator --can-interface can0 --gpio-address 0x20 --no-adc --debug
+pi4-waveshare-sim --can-interface can0 --gpio-address 0x20 --no-adc --debug
 
 # For Pi 4 with Waveshare High-Precision AD/DA board:
-uut-simulator --port 8080 --waveshare-adda --no-gpio
+pi4-waveshare-sim --port 8080 --waveshare-adda --no-gpio
 ```
 
 **Raspberry Pi 5 Setup**: The Waveshare HATs require device tree overlays in `/boot/firmware/config.txt`:
@@ -658,7 +658,7 @@ The project includes tooling to track which code is covered only by mocked tests
 python scripts/run_coverage.py
 
 # Specific package(s)
-python scripts/run_coverage.py -p hwtest-core -p hwtest-uut
+python scripts/run_coverage.py -p hwtest-core -p hwtest-sim-pi4-waveshare
 
 # With mock analysis report
 python scripts/run_coverage.py --analyze-mocks
@@ -741,7 +741,7 @@ class BkDcPsuEmulator:
         ...
 ```
 
-**UUT Simulator** (`hwtest-uut/simulator.py`):
+**Pi 4 Waveshare Simulator** (`hwtest-sim-pi4-waveshare/simulator.py`):
 - Full REST API simulating a Unit Under Test
 - Supports ADC/DAC/GPIO/CAN interfaces
 - Can inject failures for stress testing
