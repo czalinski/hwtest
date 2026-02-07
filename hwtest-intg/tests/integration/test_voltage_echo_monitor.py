@@ -70,6 +70,7 @@ from hwtest_core.types.monitor import MonitorResult, MonitorVerdict
 from hwtest_core.types.state import EnvironmentalState, StateTransition
 from hwtest_core.types.streaming import StreamData, StreamField, StreamSchema
 from hwtest_testcase import Monitor, TestDefinition, MonitorState, load_definition
+from hwtest_rack import Rack
 from hwtest_rack.config import RackConfig, load_config as load_rack_config
 from hwtest_rack.instance import RackInstanceConfig, load_instance_config
 
@@ -423,16 +424,6 @@ class CancellationToken:
 # =============================================================================
 
 
-def get_mcc152_address() -> int:
-    """Get MCC 152 address from environment."""
-    return int(os.environ.get("MCC152_ADDRESS", "0"))
-
-
-def get_mcc118_address() -> int:
-    """Get MCC 118 address from environment."""
-    return int(os.environ.get("MCC118_ADDRESS", "4"))
-
-
 @pytest.fixture
 def test_definition() -> TestDefinition:
     """Provide the test definition loaded from YAML."""
@@ -452,46 +443,40 @@ def rack_instance() -> RackInstanceConfig:
 
 
 @pytest.fixture
-def mcc152_dac() -> Generator[Any, None, None]:
-    """Provide an MCC 152 HAT for DAC output."""
-    try:
-        import daqhats  # type: ignore[import-not-found]
-    except ImportError:
-        pytest.skip("daqhats library not installed")
+def rack(rack_config: RackConfig) -> Generator[Rack, None, None]:
+    """Provide an initialized test rack with all instruments ready.
 
-    address = get_mcc152_address()
+    The rack is loaded from YAML configuration and all instruments
+    (MCC 152 DAC, MCC 118 ADC, etc.) are initialized automatically.
+    The test case does not need to know HAT addresses or implementation details.
+    """
+    test_rack = Rack(rack_config)
+
     try:
-        hat = daqhats.mcc152(address)
+        test_rack.initialize()
     except Exception as exc:
-        pytest.skip(f"MCC 152 not found at address {address}: {exc}")
+        pytest.skip(f"Failed to initialize rack: {exc}")
 
-    # Set initial output to 0V
-    hat.a_out_write(0, 0.0)
+    if test_rack.state != "ready":
+        status = test_rack.get_status()
+        errors = [i.error for i in status.instruments if i.error]
+        pytest.skip(f"Rack not ready: {errors}")
 
-    yield hat
-
-    # Reset to 0V on cleanup
+    # Set initial DAC output to 0V
     try:
-        hat.a_out_write(0, 0.0)
+        test_rack.write_analog("rack_dac", 0.0)
     except Exception:
         pass
 
+    yield test_rack
 
-@pytest.fixture
-def mcc118_adc() -> Generator[Any, None, None]:
-    """Provide an MCC 118 HAT for ADC input."""
+    # Reset DAC to 0V on cleanup
     try:
-        import daqhats  # type: ignore[import-not-found]
-    except ImportError:
-        pytest.skip("daqhats library not installed")
+        test_rack.write_analog("rack_dac", 0.0)
+    except Exception:
+        pass
 
-    address = get_mcc118_address()
-    try:
-        hat = daqhats.mcc118(address)
-    except Exception as exc:
-        pytest.skip(f"MCC 118 not found at address {address}: {exc}")
-
-    yield hat
+    test_rack.close()
 
 
 @pytest.fixture
@@ -600,21 +585,24 @@ class TestVoltageEchoMonitor:
     async def _run_echo_cycle(
         self,
         uut_client: Any,
-        mcc152_dac: Any,
-        mcc118_adc: Any,
+        rack: Rack,
         state: EnvironmentalState,
         definition: TestDefinition,
         rack_instance: RackInstanceConfig,
     ) -> VoltageReadings:
-        """Run one echo cycle for a given state."""
+        """Run one echo cycle for a given state.
+
+        Uses the Rack abstraction to access instruments by logical channel name.
+        The test case does not need to know about MCC HAT addresses or details.
+        """
         target_voltage = state.metadata.get("target_voltage", 0.0)
         settling_time = definition.case_parameters.get("settling_time_seconds", 0.025)
         uut_adc_scale = rack_instance.get_calibration("uut_adc_scale_factor", 1.0)
         mcc118_scale = rack_instance.get_calibration("mcc118_scale_factor", 1.0)
 
-        # Step 1: Set output voltage on rack DAC
-        mcc152_dac.a_out_write(0, target_voltage)
-        logger.debug(f"Set MCC 152 DAC to {target_voltage}V")
+        # Step 1: Set output voltage on rack DAC (using logical channel name)
+        rack.write_analog("rack_dac", target_voltage)
+        logger.debug(f"Set rack DAC to {target_voltage}V")
         time.sleep(settling_time)
 
         # Step 2: Read voltage on UUT ADC (apply calibration)
@@ -627,10 +615,10 @@ class TestVoltageEchoMonitor:
         logger.debug(f"UUT DAC write: {uut_adc_voltage}V")
         time.sleep(settling_time)
 
-        # Step 4: Read echoed voltage on rack ADC (apply calibration)
-        rack_adc_raw = mcc118_adc.a_in_read(0)
+        # Step 4: Read echoed voltage on rack ADC (using logical channel name)
+        rack_adc_raw = rack.read_analog("rack_adc")
         measured_voltage = rack_adc_raw * mcc118_scale
-        logger.debug(f"MCC 118 ADC read: {rack_adc_raw}V (calibrated: {measured_voltage}V)")
+        logger.debug(f"Rack ADC read: {rack_adc_raw}V (calibrated: {measured_voltage}V)")
 
         return VoltageReadings(
             target_voltage=target_voltage,
@@ -668,8 +656,7 @@ class TestVoltageEchoMonitor:
     async def _run_single_pass(
         self,
         uut_client: Any,
-        mcc152_dac: Any,
-        mcc118_adc: Any,
+        rack: Rack,
         monitor: Monitor,
         states: list[EnvironmentalState],
         definition: TestDefinition,
@@ -691,7 +678,7 @@ class TestVoltageEchoMonitor:
             )
 
             readings = await self._run_echo_cycle(
-                uut_client, mcc152_dac, mcc118_adc, state, definition, rack_instance
+                uut_client, rack, state, definition, rack_instance
             )
 
             await self._log_telemetry(telemetry_logger, readings)
@@ -715,8 +702,7 @@ class TestVoltageEchoMonitor:
     async def test_voltage_echo_monitored(
         self,
         uut_client: Any,
-        mcc152_dac: Any,
-        mcc118_adc: Any,
+        rack: Rack,
         voltage_monitor: Monitor,
         environmental_states: list[EnvironmentalState],
         test_definition: TestDefinition,
@@ -733,6 +719,7 @@ class TestVoltageEchoMonitor:
 
         Test parameters are loaded from configs/voltage_echo_monitor.yaml.
         Hardware calibration is loaded from the rack instance configuration.
+        Instrument access is via the Rack abstraction using logical channel names.
         """
         test_mode = get_execution_mode()
         stats = RunStatistics()
@@ -760,8 +747,7 @@ class TestVoltageEchoMonitor:
             if test_mode == ExecutionMode.FUNCTIONAL:
                 failure = await self._run_single_pass(
                     uut_client,
-                    mcc152_dac,
-                    mcc118_adc,
+                    rack,
                     voltage_monitor,
                     environmental_states,
                     test_definition,
@@ -782,8 +768,7 @@ class TestVoltageEchoMonitor:
 
                     failure = await self._run_single_pass(
                         uut_client,
-                        mcc152_dac,
-                        mcc118_adc,
+                        rack,
                         voltage_monitor,
                         environmental_states,
                         test_definition,
@@ -802,7 +787,7 @@ class TestVoltageEchoMonitor:
                 logger.info(f"Test cancelled after {stats.cycles_completed} cycles")
 
         finally:
-            mcc152_dac.a_out_write(0, 0.0)
+            rack.write_analog("rack_dac", 0.0)
             await uut_client.dac_write(0, 0.0)
             logger.info(f"Final statistics: {stats.summary()}")
 

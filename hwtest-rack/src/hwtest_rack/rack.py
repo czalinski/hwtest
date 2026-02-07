@@ -438,3 +438,87 @@ class Rack:
         """
         channels = self.config.channel_registry.get_by_type(ChannelType.PSU)
         return [ch.logical_name for ch in channels]
+
+    # -------------------------------------------------------------------------
+    # Analog Channel Operations
+    # -------------------------------------------------------------------------
+
+    def write_analog(self, logical_name: str, voltage: float) -> None:
+        """Write a voltage to an analog output channel.
+
+        Resolves the logical name to the instrument and channel, then
+        writes the voltage. The test case does not need to know which
+        HAT or channel number is being used.
+
+        Args:
+            logical_name: Logical channel name (e.g., "rack_dac").
+            voltage: Voltage to write.
+
+        Raises:
+            ValueError: If channel not found or instrument not ready.
+            HwtestError: If write fails.
+        """
+        channel = self.config.channel_registry.get(logical_name)
+        if channel is None:
+            raise ValueError(f"Logical channel '{logical_name}' not found")
+
+        instrument = self.get_instrument(channel.instrument_name)
+        if instrument is None:
+            raise ValueError(
+                f"Instrument '{channel.instrument_name}' for channel "
+                f"'{logical_name}' not ready"
+            )
+
+        # Try analog_write method (MCC 152 style)
+        if hasattr(instrument, "analog_write"):
+            instrument.analog_write(channel.channel_id, voltage)
+            return
+
+        # Try a_out_write method (raw daqhats style)
+        if hasattr(instrument, "a_out_write"):
+            instrument.a_out_write(channel.channel_id, voltage)
+            return
+
+        raise ValueError(
+            f"Instrument '{channel.instrument_name}' does not support analog write"
+        )
+
+    def read_analog(self, logical_name: str) -> float:
+        """Read a voltage from an analog input channel.
+
+        Resolves the logical name to the instrument and channel, then
+        reads the voltage. The test case does not need to know which
+        HAT or channel number is being used.
+
+        Args:
+            logical_name: Logical channel name (e.g., "rack_adc").
+
+        Returns:
+            Voltage in volts.
+
+        Raises:
+            ValueError: If channel not found or instrument not ready.
+            HwtestError: If read fails.
+        """
+        channel = self.config.channel_registry.get(logical_name)
+        if channel is None:
+            raise ValueError(f"Logical channel '{logical_name}' not found")
+
+        instrument = self.get_instrument(channel.instrument_name)
+        if instrument is None:
+            raise ValueError(
+                f"Instrument '{channel.instrument_name}' for channel "
+                f"'{logical_name}' not ready"
+            )
+
+        # Try read_voltage method (MCC 118 style)
+        if hasattr(instrument, "read_voltage"):
+            return instrument.read_voltage(channel.channel_id)
+
+        # Try a_in_read method (raw daqhats style)
+        if hasattr(instrument, "a_in_read"):
+            return instrument.a_in_read(channel.channel_id)
+
+        raise ValueError(
+            f"Instrument '{channel.instrument_name}' does not support analog read"
+        )

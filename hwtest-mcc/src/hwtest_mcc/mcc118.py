@@ -260,6 +260,60 @@ class Mcc118Instrument:
                 pass  # Ignore cleanup errors
             self._hat = None
 
+    # -- Single-sample read operations -----------------------------------------
+
+    def read_voltage(self, channel: str | int) -> float:
+        """Read a single voltage sample from a channel.
+
+        This method performs a single-shot read without using the continuous
+        scan engine. Useful for point-in-time measurements in test sequences.
+
+        The HAT must be opened first (via :meth:`open`). This method should
+        not be called while continuous scanning is active.
+
+        Args:
+            channel: Channel name (string) or physical channel number (0-7).
+
+        Returns:
+            Voltage in volts.
+
+        Raises:
+            HwtestError: If the HAT is not open, channel is invalid, or
+                read fails.
+        """
+        if self._hat is None:
+            raise HwtestError("HAT not opened; call open() first")
+
+        if self._running:
+            raise HwtestError("Cannot perform single read while scanning is active")
+
+        ch_id = self._resolve_channel(channel)
+        try:
+            return self._hat.a_in_read(ch_id)
+        except Exception as exc:
+            raise HwtestError(f"Failed to read channel {ch_id}: {exc}") from exc
+
+    def _resolve_channel(self, channel: str | int) -> int:
+        """Resolve a channel name or ID to a physical channel number.
+
+        Args:
+            channel: Channel name (string) or physical channel number (int).
+
+        Returns:
+            Physical channel number (0-7).
+
+        Raises:
+            HwtestError: If channel number is out of range or name is unknown.
+        """
+        if isinstance(channel, int):
+            if not 0 <= channel <= 7:
+                raise HwtestError(f"Channel must be 0-7, got {channel}")
+            return channel
+        for ch in self._config.channels:
+            if ch.name == channel:
+                return ch.id
+        raise HwtestError(f"Unknown channel: {channel}")
+
     def _channel_mask(self) -> int:
         """Compute the channel bitmask for a_in_scan_start.
 
