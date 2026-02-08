@@ -287,7 +287,7 @@ class LoggerDef:
         class_name: Name of the logger class.
         kwargs: Arguments passed to logger constructor.
         topics: List of topics this logger should subscribe to.
-        enabled: Whether this logger is enabled (can be toggled via env vars).
+        enabled: Whether this logger is enabled (default: True).
         ignore_offsite: If True, this logger is skipped when running in offsite mode.
             Use this for network-dependent loggers (InfluxDB, databases) that
             cannot function without connectivity.
@@ -590,23 +590,13 @@ class TestDefinition:
         # Parse loggers
         loggers: dict[str, LoggerDef] = {}
         for logger_name, logger_data in data.get("loggers", {}).items():
-            # Check if enabled (default True, can be overridden by env var)
-            enabled = logger_data.get("enabled", True)
-            env_var = logger_data.get("enabled_env_var")
-            if env_var:
-                env_value = os.environ.get(env_var, "").lower()
-                if env_value in ("0", "false", "no", "off"):
-                    enabled = False
-                elif env_value in ("1", "true", "yes", "on"):
-                    enabled = True
-
             loggers[logger_name] = LoggerDef(
                 name=logger_name,
                 module=logger_data.get("module", ""),
                 class_name=logger_data.get("class", ""),
                 kwargs=dict(logger_data.get("kwargs", {})),
                 topics=list(logger_data.get("topics", [])),
-                enabled=enabled,
+                enabled=logger_data.get("enabled", True),
                 ignore_offsite=logger_data.get("ignore_offsite", False),
             )
 

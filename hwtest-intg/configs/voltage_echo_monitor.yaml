@@ -144,17 +144,16 @@ monitors:
 #   - module/class: Python module and class for dynamic loading
 #   - kwargs: Arguments passed to logger constructor
 #   - topics: List of topics this logger should subscribe to
-#   - enabled: Whether this logger is enabled (default: true)
-#   - enabled_env_var: Environment variable to control enabled state
+#   - enabled: Whether this logger is active (default: true)
+#   - ignore_offsite: If true, logger is skipped when OFFSITE_MODE=1
 
 loggers:
-  # InfluxDB logger for real-time telemetry (requires network)
+  # InfluxDB logger for real-time telemetry visualization
+  # Skipped in offsite mode since it requires network connectivity
   influxdb_logger:
     module: hwtest_logger
     class: InfluxDbStreamLogger
-    enabled: false  # Disabled by default
-    enabled_env_var: TELEMETRY_ENABLED  # Set to "1" to enable
-    ignore_offsite: true  # Skip when running in offsite mode
+    ignore_offsite: true
     kwargs:
       url: "${INFLUXDB_URL:http://localhost:8086}"
       org: "${INFLUXDB_ORG:hwtest}"
@@ -167,14 +166,12 @@ loggers:
       - voltage_echo
 
   # CSV logger for local file storage
-  # Used for offsite mode - data can be imported to InfluxDB later
+  # Works in offsite mode - data can be imported to InfluxDB later via:
+  #   hwtest-import-csv /path/to/logs --url http://influx:8086 --token <token>
   # Directory structure: {output_dir}/{test_type}/{test_case_id}/{test_run_id}/
   csv_logger:
     module: hwtest_logger
     class: CsvStreamLogger
-    enabled: false  # Disabled by default
-    enabled_env_var: CSV_LOGGING_ENABLED  # Set to "1" to enable
-    ignore_offsite: false  # Works in offsite mode
     kwargs:
       output_dir: "${CSV_LOG_DIR:./logs}"
       organize_by_tags: true
