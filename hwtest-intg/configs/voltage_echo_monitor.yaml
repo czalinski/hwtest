@@ -148,11 +148,13 @@ monitors:
 #   - enabled_env_var: Environment variable to control enabled state
 
 loggers:
+  # InfluxDB logger for real-time telemetry (requires network)
   influxdb_logger:
     module: hwtest_logger
     class: InfluxDbStreamLogger
     enabled: false  # Disabled by default
     enabled_env_var: TELEMETRY_ENABLED  # Set to "1" to enable
+    ignore_offsite: true  # Skip when running in offsite mode
     kwargs:
       url: "${INFLUXDB_URL:http://localhost:8086}"
       org: "${INFLUXDB_ORG:hwtest}"
@@ -164,18 +166,21 @@ loggers:
     topics:
       - voltage_echo
 
-  # CSV logger for local file storage (useful for debugging)
-  # csv_logger:
-  #   module: hwtest_logger
-  #   class: CsvStreamLogger
-  #   enabled: false
-  #   enabled_env_var: CSV_LOGGING_ENABLED
-  #   kwargs:
-  #     output_dir: "./logs"
-  #     organize_by_tags: true
-  #     buffer_size: 100
-  #   topics:
-  #     - voltage_echo
+  # CSV logger for local file storage
+  # Used for offsite mode - data can be imported to InfluxDB later
+  # Directory structure: {output_dir}/{test_type}/{test_case_id}/{test_run_id}/
+  csv_logger:
+    module: hwtest_logger
+    class: CsvStreamLogger
+    enabled: false  # Disabled by default
+    enabled_env_var: CSV_LOGGING_ENABLED  # Set to "1" to enable
+    ignore_offsite: false  # Works in offsite mode
+    kwargs:
+      output_dir: "${CSV_LOG_DIR:./logs}"
+      organize_by_tags: true
+      buffer_size: 100
+    topics:
+      - voltage_echo
 
 # =============================================================================
 # Functional Requirements (optional)

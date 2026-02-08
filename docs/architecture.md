@@ -428,3 +428,111 @@ This design allows:
 - Loggers to be enabled/disabled via environment variables
 - Multiple loggers to run simultaneously (e.g., CSV for debugging, InfluxDB for production)
 - Consistent configuration pattern with monitors
+
+## Offsite Mode
+
+Offsite mode enables test execution without network connectivity. Data is captured locally and imported later when connectivity is restored.
+
+### Offsite Configuration
+
+Loggers can be marked as network-dependent with `ignore_offsite: true`:
+
+```yaml
+loggers:
+  # Network-dependent - skipped in offsite mode
+  influxdb_logger:
+    module: hwtest_logger
+    class: InfluxDbStreamLogger
+    ignore_offsite: true  # Skip when running offsite
+    enabled_env_var: TELEMETRY_ENABLED
+    kwargs:
+      url: "${INFLUXDB_URL:http://localhost:8086}"
+      token: "${INFLUXDB_TOKEN}"
+
+  # Local storage - works in offsite mode
+  csv_logger:
+    module: hwtest_logger
+    class: CsvStreamLogger
+    ignore_offsite: false  # Always available
+    enabled_env_var: CSV_LOGGING_ENABLED
+    kwargs:
+      output_dir: "${CSV_LOG_DIR:./logs}"
+      organize_by_tags: true
+```
+
+### Running in Offsite Mode
+
+Set `OFFSITE_MODE=1` to enable offsite mode:
+
+```bash
+# Enable offsite mode and CSV logging
+OFFSITE_MODE=1 CSV_LOGGING_ENABLED=1 pytest test_voltage_echo_monitor.py
+
+# Data is captured to ./logs/{test_type}/{test_case_id}/{test_run_id}/
+```
+
+### CSV Directory Structure
+
+The CSV logger organizes data for later import:
+
+```
+logs/
+└── HASS/
+    └── voltage_echo_monitor/
+        └── abc12345/
+            ├── metadata.json      # Tags, schemas, topic list
+            └── voltage_echo.csv   # Telemetry data
+```
+
+The `metadata.json` file contains:
+- Test tags (test_type, test_case_id, test_run_id, rack_id, uut_id)
+- Topic list
+- Schema definitions for each topic
+
+### Importing Offsite Data
+
+Use the `hwtest-import-csv` tool to import data when back online:
+
+```bash
+# Import a single test run
+hwtest-import-csv /logs/HASS/voltage_echo_monitor/abc12345 \
+    --url http://localhost:8086 \
+    --token $INFLUXDB_TOKEN
+
+# Import all test runs in a directory
+hwtest-import-csv /logs \
+    --url http://localhost:8086 \
+    --token $INFLUXDB_TOKEN
+
+# Dry run to preview what would be imported
+hwtest-import-csv /logs --dry-run
+```
+
+The import tool:
+1. Scans for directories containing `metadata.json`
+2. Reads tags and schema information
+3. Imports CSV data with original timestamps and tags
+4. Reports success/failure for each test run
+
+### Offsite Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Offsite Testing Workflow                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                   │
+│   │   Offsite   │     │   Travel    │     │   Online    │                   │
+│   │   Testing   │────>│   with USB  │────>│   Import    │                   │
+│   └─────────────┘     └─────────────┘     └─────────────┘                   │
+│         │                   │                   │                            │
+│         ▼                   ▼                   ▼                            │
+│   OFFSITE_MODE=1     Copy logs to      hwtest-import-csv                    │
+│   CSV_LOGGING=1      USB drive         /path/to/logs                        │
+│         │                   │                   │                            │
+│         ▼                   ▼                   ▼                            │
+│   ./logs/{runs}/     Transport to      Data in InfluxDB                     │
+│                      lab network        + Grafana                           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```

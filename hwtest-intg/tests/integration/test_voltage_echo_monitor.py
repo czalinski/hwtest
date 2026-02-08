@@ -216,6 +216,17 @@ def _get_rack_instance() -> RackInstanceConfig:
 # =============================================================================
 
 
+def is_offsite_mode() -> bool:
+    """Check if running in offsite mode (no network connectivity).
+
+    In offsite mode, loggers with ignore_offsite=True are skipped.
+    Data is captured locally (CSV) and can be imported later.
+
+    Set OFFSITE_MODE=1 to enable offsite mode.
+    """
+    return os.environ.get("OFFSITE_MODE", "0").lower() in ("1", "true", "yes", "on")
+
+
 def get_rack_id() -> str:
     """Get rack ID from environment."""
     return os.environ.get("RACK_ID", "pi5-mcc-intg-a")
@@ -525,7 +536,11 @@ async def telemetry_logger(test_definition: TestDefinition) -> AsyncGenerator[An
     """
     import importlib
 
-    enabled_loggers = test_definition.get_enabled_loggers()
+    offsite = is_offsite_mode()
+    enabled_loggers = test_definition.get_enabled_loggers(offsite=offsite)
+
+    if offsite:
+        logger.info("Running in OFFSITE mode - network loggers skipped")
 
     if not enabled_loggers:
         logger.info("No loggers enabled (check YAML and environment variables)")

@@ -288,6 +288,9 @@ class LoggerDef:
         kwargs: Arguments passed to logger constructor.
         topics: List of topics this logger should subscribe to.
         enabled: Whether this logger is enabled (can be toggled via env vars).
+        ignore_offsite: If True, this logger is skipped when running in offsite mode.
+            Use this for network-dependent loggers (InfluxDB, databases) that
+            cannot function without connectivity.
     """
 
     name: str
@@ -296,6 +299,7 @@ class LoggerDef:
     kwargs: dict[str, Any] = field(default_factory=dict)
     topics: list[str] = field(default_factory=list)
     enabled: bool = True
+    ignore_offsite: bool = False
 
 
 # =============================================================================
@@ -422,13 +426,21 @@ class TestDefinition:
         """
         return self.loggers[logger_name]
 
-    def get_enabled_loggers(self) -> list[LoggerDef]:
+    def get_enabled_loggers(self, offsite: bool = False) -> list[LoggerDef]:
         """Get all enabled logger definitions.
 
+        Args:
+            offsite: If True, filter out loggers with ignore_offsite=True.
+                Use this when running without network connectivity.
+
         Returns:
-            List of LoggerDef objects where enabled=True.
+            List of LoggerDef objects that are enabled and appropriate
+            for the current mode.
         """
-        return [lg for lg in self.loggers.values() if lg.enabled]
+        loggers = [lg for lg in self.loggers.values() if lg.enabled]
+        if offsite:
+            loggers = [lg for lg in loggers if not lg.ignore_offsite]
+        return loggers
 
     def get_parameter(self, name: str, state_id: str | None = None) -> Any:
         """Get a parameter value, with optional state override.
@@ -595,6 +607,7 @@ class TestDefinition:
                 kwargs=dict(logger_data.get("kwargs", {})),
                 topics=list(logger_data.get("topics", [])),
                 enabled=enabled,
+                ignore_offsite=logger_data.get("ignore_offsite", False),
             )
 
         # Parse functional requirements (optional)

@@ -24,6 +24,9 @@ dependencies = [
     "hwtest-core",
 ]
 
+[project.scripts]
+hwtest-import-csv = "hwtest_logger.csv_import:main"
+
 [project.optional-dependencies]
 influxdb = [
     "influxdb-client>=1.36",
