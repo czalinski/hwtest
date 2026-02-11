@@ -1,0 +1,23 @@
+# =============================================================================
+# Station Configuration: Pi 5 Bench A
+# =============================================================================
+#
+# This file ties together the rack, UUT, and available test cases
+# for a specific test station.
+
+station:
+  id: "pi5-bench-a"
+  description: "Pi 5 integration bench A"
+
+rack:
+  config: "pi5_mcc_intg_a_rack"    # rack class YAML name (searched)
+  serial: "001"                     # rack instance serial (for calibration)
+
+uut:
+  url: "http://192.168.68.4:8080"   # UUT simulator URL
+
+test_cases:
+  - id: "voltage_echo_monitor"
+    name: "Voltage Echo Monitor"
+    definition: "voltage_echo_monitor"   # test definition YAML name (searched)
+    modes: [functional, hass, halt]
