@@ -14,7 +14,7 @@ Each package has its own directory. Use a shared venv or per-package venvs. Exam
 # Setup (shared venv)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-sim-pi4-waveshare[dev]" -e "./hwtest-logger[dev]" -e "./hwtest-db[dev]" -e "./hwtest-nats[dev]" -e "./hwtest-intg[dev]"
+pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-sim-pi4-waveshare[dev]" -e "./hwtest-logger[dev]" -e "./hwtest-db[dev]" -e "./hwtest-nats[dev]" -e "./hwtest-runner[dev]" -e "./hwtest-intg[dev]"
 
 # Testing (run from each package directory)
 cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
@@ -27,6 +27,7 @@ cd hwtest-sim-pi4-waveshare && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-logger && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-db && python3 -m pytest tests/unit/ -v && cd ..
 cd hwtest-nats && python3 -m pytest tests/unit/ -v && cd ..
+cd hwtest-runner && python3 -m pytest tests/unit/ -v && cd ..
 
 # Integration tests (requires hardware setup)
 cd hwtest-intg && UUT_URL=http://<uut-ip>:8080 python3 -m pytest tests/integration/ -v -m integration && cd ..
@@ -64,6 +65,7 @@ hwtest-core  (stdlib-only, no external deps)
   ├── hwtest-db  (aiosqlite; test results persistence)
   ├── hwtest-nats  (depends on hwtest-core; nats-py)
   ├── hwtest-testcase  (depends on hwtest-core; optional hwtest-nats)
+  ├── hwtest-runner  (depends on hwtest-core, hwtest-testcase, hwtest-rack; fastapi, uvicorn, httpx, pyyaml)
   └── hwtest-intg  (depends on hwtest-core, hwtest-rack; python-can, httpx, pytest)
 ```
 
@@ -557,6 +559,69 @@ UUT_URL=http://192.168.68.xxx:8080 pytest tests/integration/ -v -m integration
 ```
 
 The UUT simulator now automatically sends heartbeat messages at 10 Hz when CAN is enabled. The heartbeat contains an 8-byte incrementing counter.
+
+### Test Runner Service (hwtest-runner)
+
+Web-based test execution service. Operators select a test case, choose a mode (functional/HASS/HALT), and monitor execution in real time from a browser. Only one test runs at a time.
+
+- **Config** (`config.py`): Station configuration loading
+  - `StationConfig`: Station ID, description, rack reference, UUT config, test case list
+  - `RackReference`: Rack class YAML name + optional instance serial for calibration
+  - `UutConfig`: UUT simulator URL
+  - `TestCaseEntry`: Test case ID, name, definition YAML name, available modes
+  - `load_station_config(path)`: Parse station YAML into config objects
+
+- **Models** (`models.py`): Pydantic request/response models
+  - `RunState` enum: IDLE, RUNNING, STOPPING
+  - `RunRequest`: test_case_id + mode
+  - `RunStatus`: state, test_case_id, mode, current_state, cycle, stats, message
+  - `StationStatus`: station info + rack state + run status + test case list
+  - `TestCaseModel`: test case info for API responses
+
+- **Executor** (`executor.py`): Test execution engine
+  - `TestExecutor`: Runs test cases in background asyncio tasks
+  - Single-run lock (only one test at a time)
+  - Cooperative cancellation via `stop()`
+  - `RunStatistics`: Tracks passes, failures, cycles, errors
+  - Voltage echo cycle logic (write DAC, read ADC, echo, read back)
+  - Loads test definitions and monitors from YAML via hwtest-testcase
+  - Uses Rack abstraction for instrument access, httpx for UUT HTTP calls
+
+- **Server** (`server.py`): FastAPI web service
+  - `GET /`: HTML dashboard with test picker, mode selector, live status (1s polling)
+  - `GET /health`: Health check
+  - `GET /status`: Full station status JSON
+  - `GET /test-cases`: List available test cases
+  - `POST /run`: Start a test (RunRequest body)
+  - `POST /stop`: Stop current test
+  - `GET /run/status`: Current run status
+  - CLI entry point: `hwtest-runner <config.yaml> --host --port --log-level`
+
+Station configuration format (`configs/pi5_bench_a_station.yaml`):
+```yaml
+station:
+  id: "pi5-bench-a"
+  description: "Pi 5 integration bench A"
+
+rack:
+  config: "pi5_mcc_intg_a_rack"    # rack class YAML name (searched)
+  serial: "001"                     # rack instance serial (for calibration)
+
+uut:
+  url: "http://192.168.68.4:8080"   # UUT simulator URL
+
+test_cases:
+  - id: "voltage_echo_monitor"
+    name: "Voltage Echo Monitor"
+    definition: "voltage_echo_monitor"   # test definition YAML name (searched)
+    modes: [functional, hass, halt]
+```
+
+Run the runner:
+```bash
+hwtest-runner configs/pi5_bench_a_station.yaml --port 8000
+# Visit http://localhost:8000 for the dashboard
+```
 
 ### Key Design Patterns
 
