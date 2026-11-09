@@ -9,20 +9,36 @@ Requirements for all code in this repository.
 
 ## Language Boundaries
 
-| Layer | Language | Why |
-|-------|----------|-----|
-| Core data types, wire protocols, bound/threshold evaluation, (next) streaming pub/sub, monitors, loggers | **Rust** (`crates/`) | Performance on SBCs, latency budget, correctness guarantees |
-| Python API over the core | **PyO3 bindings** (`hwtest-core/native/`) | Test cases import `hwtest_core` exactly as before |
-| Test cases, instrument drivers under active bring-up, rack/runner glue | **Python** | Fast iteration on hardware; accessible to subject-matter experts |
-| Test definitions, bounds, rack and station configuration | **YAML** | Declarative specs reviewed by non-developers |
+Audience: the people writing test cases are **hardware test engineers and hardware designers, not
+software developers**. They communicate through **YAML specifications** and **short top-level
+Python test scripts**. Everything else is framework code and is written in **Rust**.
 
-Rules:
-- The Rust crates are the single source of truth for data formats. Python must not reimplement
-  serialization or bound logic; it calls the bindings.
+| Layer | Language | Notes |
+|-------|----------|-------|
+| Test cases for specific hardware | **Python** | The only Python that is not glue. Plain synchronous code. |
+| Test definitions, bounds, rack/station configuration | **YAML** | Reviewed by EEs and managers |
+| Everything else: data types, wire protocols, test definitions & monitor engine, NATS streaming, loggers, results DB, rack & instrument drivers, runner/rack services, UUT simulator | **Rust** (`crates/`) | Performance on SBCs, latency budget, correctness |
+| Python API over the Rust core | **PyO3 bindings** (`hwtest-<pkg>/native/`) | Conversion glue only, no domain logic |
+
+### Execution model (decided 2026-11-09)
+
+- **The Python test script is the process entry point** and imports the Rust core as a library
+  (`import hwtest`). The Rust runner service launches test scripts as subprocesses, so a failing
+  script cannot take the service down, and engineers debug with ordinary Python tools.
+- **The test-case API is synchronous** (no `async`/`await`). Rust runs monitoring, logging and
+  streaming on its own threads and releases the GIL during blocking I/O.
+- **Instrument drivers are Rust.** As an escape hatch, a rack YAML may name a Python driver class
+  for bring-up of a one-off instrument; maintained drivers are ported to Rust.
+
+### Rules
+
+- The Rust crates are the single source of truth for data formats and evaluation logic. Python must
+  not reimplement serialization, bound checks or monitor logic; it calls the bindings.
 - Wire formats (binary streaming frames, JSON messages, bound specs) are a compatibility contract.
   Changes require updating `crates/hwtest-core/tests/fixtures/` and the compatibility tests.
 - Python-facing enums and exceptions stay defined in Python (`hwtest_core._enums`,
   `hwtest_core.errors`) and are mirrored in Rust.
+- Error messages raised to test engineers must name the YAML file/key or instrument alias involved.
 
 ## Python
 

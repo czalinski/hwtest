@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 hwtest is a monorepo for hardware test automation tools designed for HASS (Highly Accelerated Stress Screening) and HALT (Highly Accelerated Life Testing) via instrument automation. The system runs on Linux (SBCs like Orange Pi 5, Beelink, and Docker containers) with Python 3.10+ and Rust (stable, MSRV in root `Cargo.toml`).
 
-**Language split** (see `docs/coding-requirements.md`): core implementations (data types, wire protocols, bound evaluation; next: streaming pub/sub, monitors, loggers) are being moved to **Rust** in `crates/`, exposed to Python via **PyO3**. **Test cases** stay in **Python**; test bounds and configuration stay in **YAML**. The Rust crates are the single source of truth for data formats — don't reimplement serialization or bound logic in Python.
+**Language split** (see `docs/coding-requirements.md`): ALL framework code is moving to **Rust** in `crates/`, exposed to Python via **PyO3**. The only Python kept is **test cases for specific hardware**, written by hardware test engineers/designers (not software developers) as short, **synchronous** top-level scripts; specs and bounds are **YAML**. The Python script is the process entry point and imports the Rust core; the runner launches scripts as subprocesses. Drivers are Rust, with a YAML-selectable Python driver escape hatch for one-off instruments. The Rust crates are the single source of truth — don't add framework logic in Python.
+
+**Migration plan:** 0) aarch64 cross-builds for the Pis → 1) test definitions + monitor engine + rack config (`hwtest-testcase`) → 2) NATS streaming, loggers, results DB → 3) rack + instrument drivers (MCC via libdaqhats FFI, Waveshare, SCPI/BK) → 4) rack & runner services → 5) UUT simulator. Work is committed straight to `main`.
 
 ## Build and Development Commands
 
