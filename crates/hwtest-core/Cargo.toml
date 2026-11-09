@@ -1,0 +1,18 @@
+[package]
+name = "hwtest-core"
+description = "Core data types and wire protocols for hwtest HASS/HALT automation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+crc32fast.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

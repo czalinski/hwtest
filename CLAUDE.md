@@ -4,17 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-hwtest is a monorepo for hardware test automation tools designed for HASS (Highly Accelerated Stress Screening) and HALT (Highly Accelerated Life Testing) via instrument automation. The system runs on Linux (SBCs like Orange Pi 5, Beelink, and Docker containers) with Python 3.10+.
+hwtest is a monorepo for hardware test automation tools designed for HASS (Highly Accelerated Stress Screening) and HALT (Highly Accelerated Life Testing) via instrument automation. The system runs on Linux (SBCs like Orange Pi 5, Beelink, and Docker containers) with Python 3.10+ and Rust (stable, MSRV in root `Cargo.toml`).
+
+**Language split** (see `docs/coding-requirements.md`): core implementations (data types, wire protocols, bound evaluation; next: streaming pub/sub, monitors, loggers) are being moved to **Rust** in `crates/`, exposed to Python via **PyO3**. **Test cases** stay in **Python**; test bounds and configuration stay in **YAML**. The Rust crates are the single source of truth for data formats — don't reimplement serialization or bound logic in Python.
 
 ## Build and Development Commands
 
 Each package has its own directory. Use a shared venv or per-package venvs. Example for the full stack:
 
 ```bash
-# Setup (shared venv)
+# Rust toolchain (needed to build hwtest-core): https://rustup.rs
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Setup (shared venv). hwtest-core builds its Rust extension via maturin;
+# re-run `pip install -e ./hwtest-core` after changing Rust code.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-sim-pi4-waveshare[dev]" -e "./hwtest-logger[dev]" -e "./hwtest-db[dev]" -e "./hwtest-nats[dev]" -e "./hwtest-runner[dev]" -e "./hwtest-intg[dev]"
+
+# Rust (from repo root): tests incl. Python wire-compat fixtures, lint, format
+cargo test
+cargo clippy --workspace --all-targets
+cargo fmt --all --check
 
 # Testing (run from each package directory)
 cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
@@ -54,7 +65,8 @@ python3 -m pylint src/
 ### Package Dependency Chain
 
 ```
-hwtest-core  (stdlib-only, no external deps)
+crates/hwtest-core  (pure Rust: serde, serde_json, crc32fast; no PyO3)
+hwtest-core  (Python package = PyO3 extension over crates/hwtest-core; no Python deps)
   ├── hwtest-scpi  (depends on hwtest-core; optional pyvisa)
   │     └── hwtest-bkprecision  (depends on hwtest-scpi)
   ├── hwtest-mcc  (depends on hwtest-core; optional daqhats)
@@ -71,6 +83,15 @@ hwtest-core  (stdlib-only, no external deps)
 
 ### Core Library (hwtest-core)
 
+Implemented in Rust. Layout:
+- `crates/hwtest-core/src/`: the implementation (`common`, `streaming`, `telemetry`, `state`, `threshold`, `bounds`, `monitor`, `error`). No PyO3 dependency.
+- `crates/hwtest-core/tests/python_compat.rs` + `tests/fixtures/python_golden.json`: byte-for-byte wire compatibility with the original Python implementation. Update the fixtures deliberately if a wire format changes.
+- `hwtest-core/native/src/`: PyO3 bindings only (`conv.rs` = JSON<->Python, enum and error bridging; one file per domain). Built by maturin as `hwtest_core._native` (abi3-py310, `multiple-pymethods`).
+- `hwtest-core/src/hwtest_core/types/*.py`: public modules re-exporting native classes (import paths unchanged). `_native.pyi` holds the type stubs — keep it in sync with the bindings.
+- `hwtest-core/src/hwtest_core/_enums.py`: `DataType`, `ValueQuality`, `BoundType`, `MonitorVerdict` stay Python `Enum`s (mirrored in Rust, converted by value). `errors.py` exceptions are raised from Rust via `import_exception!`.
+- Classes are immutable (frozen pyclasses) except `WithinBaseline`; `to_dict`/`from_dict`/`to_bytes`/`from_bytes` go through one serde schema.
+- Intentional differences from the old Python code are listed in `hwtest-core/README.md` (fail-closed on NaN/inf, unknown `special` kinds rejected, NaN as JSON `null`, exact datetime conversion).
+
 **Types** (`src/hwtest_core/types/`):
 - `common.py`: Timestamp (nanosecond precision), SourceId, ChannelId, StateId, DataType enum, InstrumentIdentity
 - `telemetry.py`: TelemetryValue, TelemetryMessage (batch with sequence numbers)
@@ -78,6 +99,7 @@ hwtest-core  (stdlib-only, no external deps)
 - `threshold.py`: Threshold (bounds), StateThresholds (per-state)
 - `monitor.py`: MonitorVerdict, MonitorResult, ThresholdViolation
 - `streaming.py`: StreamField, StreamSchema (CRC32 ID), StreamData (binary protocol)
+- `bounds.py`: YAML bound checks (`within_range`, `within_tolerance`, `within_baseline`, `less_than`, `greater_than`, `good_interval`, `bad_interval`, `good_values`, `bad_values`, `special`), `bound_check_from_dict()`
 
 **Interfaces** (`src/hwtest_core/interfaces/`): Protocol-based definitions for TelemetryPublisher/Subscriber, StatePublisher/Subscriber, Monitor, ThresholdProvider, StreamPublisher/Subscriber, Logger/StreamLogger
 
@@ -689,7 +711,9 @@ hwtest-rack configs/orange_pi_5_rack.yaml --port 8000
 - Full type hints required (`mypy --strict`)
 - Google-style docstrings for public APIs
 - Tests mirror source structure in `tests/unit/`
-- Minimal external dependencies (core library is stdlib-only)
+- Minimal external dependencies (core library has no Python runtime deps)
+- Rust: `cargo fmt`, `cargo clippy` (pedantic) clean, no `unsafe`, doc comments on public items
+- Deployment: Docker images build the `hwtest-core` wheel in a `rust:` builder stage; bare-metal installs (Pis) need rustup to `pip install ./hwtest-core`
 
 ## Testing Philosophy
 

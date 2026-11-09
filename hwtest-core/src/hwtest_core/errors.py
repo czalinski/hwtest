@@ -30,11 +30,12 @@ class TelemetryConnectionError(HwtestError):
     """
 
 
-class SerializationError(HwtestError):
+class SerializationError(HwtestError, ValueError):
     """Raised when serialization or deserialization fails.
 
-    Common causes include malformed data, unexpected data types, or protocol
-    version mismatches.
+    Common causes include malformed data, missing fields, unexpected data
+    types, or protocol version mismatches. Subclasses ``ValueError`` so code
+    that caught JSON decode errors keeps working.
     """
 
 

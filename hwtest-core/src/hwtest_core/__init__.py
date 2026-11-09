@@ -1,9 +1,10 @@
 """Core library for hardware test automation.
 
 This package provides foundational data types, interfaces, and error types
-for the hwtest hardware test automation framework. It is designed with minimal
-external dependencies (stdlib-only) to serve as the base layer for all other
-hwtest packages.
+for the hwtest hardware test automation framework. The data types and wire
+protocols are implemented in Rust (``crates/hwtest-core``) and exposed through
+the ``hwtest_core._native`` extension; interfaces (``typing.Protocol``),
+enums and exceptions are plain Python. It has no Python runtime dependencies.
 
 Key components:
     - Types: Common types (Timestamp, SourceId, ChannelId), telemetry types

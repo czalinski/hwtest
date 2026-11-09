@@ -5,6 +5,18 @@
 #
 # Or use docker-compose with the provided docker-compose.yaml
 
+# --- Stage 1: build the Rust-backed hwtest-core wheel (abi3, works on any Python >= 3.10) ---
+FROM rust:1-slim-bookworm AS core-builder
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/maturin && /opt/maturin/bin/pip install --no-cache-dir "maturin>=1.9.4,<2"
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY hwtest-core/ ./hwtest-core/
+RUN cd hwtest-core && /opt/maturin/bin/maturin build --release --out /wheels
+
+# --- Stage 2: runtime image ---
 FROM python:3.11-slim-bookworm
 
 LABEL maintainer="hwtest"
@@ -19,15 +31,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create app directory
 WORKDIR /opt/hwtest
 
-# Copy packages (order matters for layer caching)
-COPY hwtest-core/ ./hwtest-core/
+# Copy packages (order matters for layer caching; hwtest-core is a prebuilt wheel)
+COPY --from=core-builder /wheels /wheels
 COPY hwtest-mcc/ ./hwtest-mcc/
 COPY hwtest-rack/ ./hwtest-rack/
 COPY configs/ ./configs/
 
 # Install Python packages
 RUN pip install --no-cache-dir \
-    ./hwtest-core \
+    /wheels/hwtest_core-*.whl \
     ./hwtest-mcc \
     ./hwtest-rack
 

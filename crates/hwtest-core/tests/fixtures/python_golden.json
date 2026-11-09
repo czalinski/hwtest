@@ -1,0 +1,207 @@
+{
+  "schema_f32x2_f64": {
+    "schema_id": 381819178,
+    "bytes": "0116c2192a0361646300030363683009015603636831090156036368320a03c2b043"
+  },
+  "data_f32x2_f64": {
+    "bytes": "0216c2192a17a610170165000000000000000f424000024053333340a00000402800000000000040528f5c409fae144027cccccccccccd",
+    "decoded": [
+      [
+        3.299999952316284,
+        5.0,
+        12.0
+      ],
+      [
+        3.2899999618530273,
+        4.989999771118164,
+        11.9
+      ]
+    ]
+  },
+  "schema_all_types": {
+    "schema_id": 1559120776,
+    "bytes": "015cee4b8809616c6c5f7479706573000a02693801017503693136020175036933320301750369363404017502753805017503753136060175037533320701750375363408017503663332090175036636340a0175"
+  },
+  "data_all_types": {
+    "bytes": "025cee4b88000000000000000100000000000000020001808000800000008000000000000000ffffffffffffffffffffffffffffff3fc00000c002000000000000"
+  },
+  "schema_empty": {
+    "schema_id": 0,
+    "bytes": "0100000000000000"
+  },
+  "telemetry_value": {
+    "channel": "voltage",
+    "value": 5.0,
+    "unit": "V",
+    "source_timestamp": 1000000000,
+    "source_timestamp_source": "ptp",
+    "publish_timestamp": 1000000100,
+    "publish_timestamp_source": "local",
+    "quality": "uncertain"
+  },
+  "telemetry_message": {
+    "source": "psu",
+    "values": [
+      {
+        "channel": "v",
+        "value": 3.3,
+        "unit": "V",
+        "source_timestamp": 1000000000,
+        "source_timestamp_source": "ptp",
+        "publish_timestamp": null,
+        "publish_timestamp_source": null,
+        "quality": "good"
+      }
+    ],
+    "sequence": 7
+  },
+  "environmental_state": {
+    "state_id": "hot",
+    "name": "Hot",
+    "description": "High temp",
+    "is_transition": true,
+    "metadata": {
+      "target_temp": 85.0,
+      "chamber": "A",
+      "n": 3
+    }
+  },
+  "state_transition": {
+    "from_state": "ambient",
+    "to_state": "hot",
+    "timestamp": 1000000000,
+    "timestamp_source": "ptp",
+    "reason": "Begin thermal stress"
+  },
+  "state_transition_initial": {
+    "from_state": null,
+    "to_state": "ambient",
+    "timestamp": 1000000000,
+    "timestamp_source": "ptp",
+    "reason": ""
+  },
+  "threshold": {
+    "channel": "v3v3",
+    "low": {
+      "value": 3.0,
+      "bound_type": "inclusive"
+    },
+    "high": {
+      "value": 3.6,
+      "bound_type": "exclusive"
+    }
+  },
+  "state_thresholds": {
+    "state_id": "room",
+    "thresholds": {
+      "v3v3": {
+        "channel": "v3v3",
+        "low": {
+          "value": 3.0,
+          "bound_type": "inclusive"
+        },
+        "high": {
+          "value": 3.6,
+          "bound_type": "exclusive"
+        }
+      },
+      "t": {
+        "channel": "t",
+        "low": null,
+        "high": {
+          "value": 85.0,
+          "bound_type": "inclusive"
+        }
+      }
+    }
+  },
+  "monitor_result": {
+    "monitor_id": "mon",
+    "verdict": "fail",
+    "timestamp": 1000000000,
+    "timestamp_source": "ptp",
+    "state_id": "hot",
+    "violations": [
+      {
+        "channel": "v3v3",
+        "value": 4.0,
+        "threshold": {
+          "channel": "v3v3",
+          "low": {
+            "value": 3.0,
+            "bound_type": "inclusive"
+          },
+          "high": {
+            "value": 3.6,
+            "bound_type": "exclusive"
+          }
+        },
+        "message": "too high"
+      }
+    ],
+    "message": "Failed"
+  },
+  "bounds": [
+    {
+      "within_tolerance": [
+        10.0,
+        0.1
+      ]
+    },
+    {
+      "within_range": [
+        3.3,
+        0.1
+      ]
+    },
+    {
+      "within_baseline": [
+        20.0,
+        4.0,
+        2.0
+      ]
+    },
+    {
+      "within_baseline": [
+        20.0,
+        4.0,
+        2.0,
+        19.5
+      ]
+    },
+    {
+      "less_than": 11.0
+    },
+    {
+      "greater_than": -1.0
+    },
+    {
+      "good_interval": [
+        0.0,
+        5.0
+      ]
+    },
+    {
+      "bad_interval": [
+        1.0,
+        2.0
+      ]
+    },
+    {
+      "good_values": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "bad_values": [
+        -1,
+        255
+      ]
+    },
+    {
+      "special": "any"
+    }
+  ]
+}

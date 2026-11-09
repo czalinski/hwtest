@@ -34,3 +34,5 @@ docs
 # Build artifacts
 dist
 build
+target
+**/*.so

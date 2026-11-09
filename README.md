@@ -10,7 +10,8 @@ This monorepo contains multiple projects for hardware testing automation, target
 
 | Project | Description |
 |---------|-------------|
-| [hwtest-core](hwtest-core/) | Core library with data types and interface definitions |
+| [crates/hwtest-core](crates/hwtest-core/) | Rust implementation of core data types and wire protocols |
+| [hwtest-core](hwtest-core/) | Python package (PyO3 bindings) with data types and interface definitions |
 
 ## Documentation
 

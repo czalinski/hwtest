@@ -68,6 +68,18 @@ install_native() {
     log_info "Creating Python virtual environment..."
     python3 -m venv "$INSTALL_DIR/venv"
 
+    # hwtest-core is a Rust extension; building it needs a Rust toolchain
+    # (rustup installs per user, so look in the invoking user's ~/.cargo too).
+    CARGO_BIN="$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)/.cargo/bin"
+    if [[ -x "$CARGO_BIN/cargo" ]]; then
+        export PATH="$CARGO_BIN:$PATH"
+    fi
+    if ! command -v cargo >/dev/null 2>&1; then
+        log_error "Rust toolchain not found (needed to build hwtest-core). Install it with:"
+        log_error "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        exit 1
+    fi
+
     # Install packages
     log_info "Installing hwtest packages..."
     "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
