@@ -159,3 +159,101 @@ impl BoundCheck {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_within_tolerance() {
+        let check = BoundCheck::WithinTolerance(WithinTolerance {
+            center: 100.0,
+            fraction: 0.05,
+        });
+        assert!(check.check(102.0));
+        assert!(!check.check(110.0));
+    }
+
+    #[test]
+    fn test_within_range() {
+        let check = BoundCheck::WithinRange(WithinRange {
+            center: 3.3,
+            delta: 0.1,
+        });
+        assert!(check.check(3.35));
+        assert!(!check.check(3.5));
+    }
+
+    #[test]
+    fn test_within_baseline() {
+        let mut check = BoundCheck::WithinBaseline(WithinBaseline {
+            nominal: 5.0,
+            init_delta: 0.5,
+            tight_delta: 0.1,
+            baseline: None,
+        });
+        assert!(check.check(5.2));
+        assert!(check.check(5.25));
+        assert!(!check.check(5.5));
+    }
+
+    #[test]
+    fn test_less_than() {
+        let check = BoundCheck::LessThan(LessThan { limit: 100.0 });
+        assert!(check.check(99.9));
+        assert!(!check.check(100.0));
+    }
+
+    #[test]
+    fn test_greater_than() {
+        let check = BoundCheck::GreaterThan(GreaterThan { limit: 0.0 });
+        assert!(check.check(0.1));
+        assert!(!check.check(0.0));
+    }
+
+    #[test]
+    fn test_good_interval() {
+        let check = BoundCheck::GoodInterval(GoodInterval {
+            low: 0.0,
+            high: 5.0,
+        });
+        assert!(check.check(2.5));
+        assert!(!check.check(5.1));
+    }
+
+    #[test]
+    fn test_bad_interval() {
+        let check = BoundCheck::BadInterval(BadInterval {
+            low: 1.0,
+            high: 2.0,
+        });
+        assert!(check.check(0.5));
+        assert!(!check.check(1.5));
+    }
+
+    #[test]
+    fn test_good_values() {
+        let check = BoundCheck::GoodValues(GoodValues {
+            values: vec![0, 1, 2],
+        });
+        assert!(check.check(1.4));
+        assert!(!check.check(2.6));
+    }
+
+    #[test]
+    fn test_bad_values() {
+        let check = BoundCheck::BadValues(BadValues {
+            values: vec![-1, 255],
+        });
+        assert!(check.check(0.0));
+        assert!(!check.check(-0.6));
+    }
+
+    #[test]
+    fn test_special_any() {
+        let check = BoundCheck::Special(Special {
+            kind: "any".to_string(),
+        });
+        assert!(check.check(123.45));
+    }
+}
