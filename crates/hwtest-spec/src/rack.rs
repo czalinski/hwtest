@@ -226,6 +226,29 @@ impl RackConfig {
         self.instruments.values().flat_map(|i| i.channels.iter())
     }
 
+    /// Finds `<rack_class>.yaml` (or `.yml`) in `search_paths`
+    /// (default: [`crate::search::rack_search_paths`] with no extras) and loads it.
+    ///
+    /// # Errors
+    /// [`crate::SpecError::NotFound`] if no file matches, else as [`RackConfig::from_file`].
+    pub fn find(rack_class: &str, search_paths: Option<&[PathBuf]>) -> Result<Self> {
+        let default;
+        let dirs = match search_paths {
+            Some(d) => d,
+            None => {
+                default = crate::search::rack_search_paths(&[]);
+                &default
+            }
+        };
+        let path = crate::search::require_first(
+            &format!("Rack config '{rack_class}'"),
+            dirs,
+            &crate::search::yaml_names(rack_class, &[""]),
+            "Set HWTEST_RACK_PATH or pass the rack file path",
+        )?;
+        Self::from_file(path)
+    }
+
     /// Looks up a logical channel by name.
     pub fn channel(&self, logical_name: &str) -> Option<&LogicalChannel> {
         self.channels().find(|c| c.logical_name == logical_name)

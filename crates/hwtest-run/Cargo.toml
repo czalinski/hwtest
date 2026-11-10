@@ -1,0 +1,30 @@
+[package]
+name = "hwtest-run"
+description = "Test run engine for hwtest: state sequencing, monitors, logging, NATS, results"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hwtest-core.workspace = true
+hwtest-spec.workspace = true
+hwtest-rack.workspace = true
+hwtest-instruments.workspace = true
+hwtest-logger.workspace = true
+hwtest-nats.workspace = true
+hwtest-db.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

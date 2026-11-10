@@ -100,7 +100,7 @@ impl PyTestCaseInfo {
 #[pyclass(frozen, eq, module = "hwtest_core.spec", name = "MonitorState")]
 #[derive(Clone, PartialEq)]
 pub struct PyMonitorState {
-    inner: MonitorState,
+    pub(crate) inner: MonitorState,
 }
 
 #[pymethods]
@@ -303,7 +303,7 @@ impl PyLoggerDef {
 /// A validated test definition.
 #[pyclass(frozen, module = "hwtest_core.spec", name = "TestDefinition")]
 pub struct PyTestDefinition {
-    inner: TestDefinition,
+    pub(crate) inner: TestDefinition,
 }
 
 fn key_error(kind: &str, key: &str) -> PyErr {
@@ -585,4 +585,32 @@ pub fn check_definitions(py: Python<'_>, paths: Vec<PathBuf>) -> PyResult<Bound<
         })
         .collect::<Vec<_>>();
     PyList::new(py, rows)
+}
+
+/// Validates YAML files of any kind (test definition, rack, station, rack
+/// instance), detected from their top-level keys. Returns
+/// `[(path, kind, error_or_None)]`.
+#[pyfunction]
+pub fn check_spec_files(paths: Vec<PathBuf>) -> Vec<(String, String, Option<String>)> {
+    paths
+        .into_iter()
+        .map(|p| {
+            let shown = p.display().to_string();
+            let text = match std::fs::read_to_string(&p) {
+                Ok(t) => t,
+                Err(e) => return (shown.clone(), "unknown".into(), Some(format!("{shown}: {e}"))),
+            };
+            let has = |key: &str| text.lines().any(|l| l.starts_with(&format!("{key}:")));
+            let (kind, err) = if has("station") {
+                ("station", hwtest_spec::StationConfig::from_file(&p).err())
+            } else if has("rack_instance") {
+                ("rack instance", hwtest_spec::RackInstance::from_file(&p).err())
+            } else if has("instruments") || has("rack") && !has("test_case") {
+                ("rack", hwtest_spec::RackConfig::from_file(&p).err())
+            } else {
+                ("test definition", TestDefinition::from_file(&p).err())
+            };
+            (shown, kind.to_string(), err.map(|e| e.to_string()))
+        })
+        .collect()
 }

@@ -1,0 +1,35 @@
+[package]
+name = "hwtest-runner"
+description = "Test station runner: launches Python test cases and shows live status"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "hwtest-runner"
+path = "src/bin/hwtest_runner.rs"
+
+[dependencies]
+hwtest-spec.workspace = true
+hwtest-run.workspace = true
+hwtest-db.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+axum = "0.8"
+ureq = { version = "3", default-features = false }
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tower-service = "0.3"
+
+[lints]
+workspace = true

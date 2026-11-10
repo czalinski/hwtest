@@ -20,6 +20,7 @@ hwtest-instruments = { path = "crates/hwtest-instruments" }
 hwtest-rack = { path = "crates/hwtest-rack" }
 hwtest-logger = { path = "crates/hwtest-logger" }
 hwtest-db = { path = "crates/hwtest-db" }
+hwtest-run = { path = "crates/hwtest-run" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = { version = "2", features = ["serde"] }

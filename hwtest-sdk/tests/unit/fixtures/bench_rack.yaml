@@ -1,0 +1,17 @@
+rack: {id: sdk-bench, description: Emulated SDK test bench}
+instruments:
+  dio:
+    driver: mcc152
+    identity: {manufacturer: Measurement Computing, model: MCC 152}
+    kwargs:
+      address: 0
+      dio_channels: [{id: 0, name: dut_power, direction: OUTPUT}, {id: 1, name: door, direction: INPUT}]
+      analog_channels: [{id: 0, name: stimulus}]
+  daq:
+    driver: mcc118
+    identity: {manufacturer: Measurement Computing, model: MCC 118}
+    kwargs: {address: 4, channels: [{id: 0, name: response}]}
+  psu:
+    driver: bk_psu
+    identity: {manufacturer: B&K Precision, model: "9115"}
+    kwargs: {visa_address: "emulator:bk9115", channels: [{id: 1, logical_name: vin, max_voltage: 13.0}]}

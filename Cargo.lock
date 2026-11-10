@@ -834,6 +834,9 @@ name = "hwtest-core-python"
 version = "0.1.0"
 dependencies = [
  "hwtest-core",
+ "hwtest-instruments",
+ "hwtest-rack",
+ "hwtest-run",
  "hwtest-spec",
  "indexmap",
  "pyo3",
@@ -924,6 +927,49 @@ dependencies = [
  "tower-service",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "hwtest-run"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hwtest-core",
+ "hwtest-db",
+ "hwtest-instruments",
+ "hwtest-logger",
+ "hwtest-nats",
+ "hwtest-rack",
+ "hwtest-spec",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hwtest-runner"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "clap",
+ "hwtest-db",
+ "hwtest-run",
+ "hwtest-spec",
+ "nix 0.31.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower-service",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
 ]
 
 [[package]]
@@ -1281,6 +1327,18 @@ name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.13.2",
  "cfg-if",

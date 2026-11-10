@@ -1,0 +1,16 @@
+test_case: {id: loop_test, name: Analog Loop Test}
+rack: bench_rack
+case_parameters: {settle_s: 0.0, gain: 1.0}
+monitor_states:
+  low: {name: Low, target_voltage: 1.0}
+  high: {name: High, target_voltage: 4.0}
+state_sequence: [low, high]
+monitors:
+  loop_monitor:
+    kind: bounds
+    kwargs.0: {}
+    configuration:
+      low: {response: {within_range: [1.0, 0.05]}}
+      high: {response: {within_range: [4.0, 0.05]}}
+loggers:
+  csv: {kind: csv, kwargs: {output_dir: "${HWTEST_TEST_LOG_DIR:/tmp/hwtest-sdk-logs}"}, topics: [loop_test]}

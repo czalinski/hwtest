@@ -5,7 +5,9 @@
 //! rack: {config: pi5_mcc_intg_a_rack, serial: "001"}
 //! uut: {url: "http://192.168.68.4:8080"}
 //! test_cases:
-//!   - {id: voltage_echo_monitor, name: Voltage Echo Monitor, modes: [functional, hass, halt]}
+//!   - {id: voltage_echo_monitor, name: Voltage Echo Monitor, modes: [functional, hass, halt],
+//!      script: tests/voltage_echo_monitor.py}     # default: <id>.py next to this file or in tests/
+//! environment: {INFLUXDB_URL: "http://influx:8086"}  # optional, passed to test scripts
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -28,6 +30,8 @@ struct RawStation {
     uut: Spanned<RawUut>,
     #[serde(default)]
     test_cases: Option<Vec<Spanned<RawTestCase>>>,
+    #[serde(default)]
+    environment: Option<indexmap::IndexMap<String, Value>>,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +48,8 @@ struct RawRackRef {
     config: Option<String>,
     #[serde(default)]
     serial: Option<Value>,
+    #[serde(default)]
+    url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +66,8 @@ struct RawTestCase {
     definition: Option<String>,
     #[serde(default)]
     modes: Option<Vec<Spanned<String>>>,
+    #[serde(default)]
+    script: Option<String>,
 }
 
 /// Rack used by a station.
@@ -69,6 +77,8 @@ pub struct RackReference {
     pub config: String,
     /// Rack instance serial (selects calibration).
     pub serial: Option<String>,
+    /// `hwtest-rack` server URL (for live rack status), if any.
+    pub url: Option<String>,
 }
 
 /// A test case offered by the station.
@@ -82,6 +92,8 @@ pub struct TestCaseEntry {
     pub definition: String,
     /// Allowed modes (default `[functional]`).
     pub modes: Vec<String>,
+    /// Test script path as written (relative to the station file).
+    pub script: Option<String>,
 }
 
 /// A test station.
@@ -97,6 +109,8 @@ pub struct StationConfig {
     pub uut_url: String,
     /// Offered test cases.
     pub test_cases: Vec<TestCaseEntry>,
+    /// Environment variables passed to test scripts.
+    pub environment: indexmap::IndexMap<String, String>,
     /// Source file.
     pub source_path: Option<PathBuf>,
 }
@@ -158,21 +172,26 @@ impl StationConfig {
                 definition: tc.value.definition.unwrap_or_else(|| tc_id.clone()),
                 id: tc_id,
                 modes,
+                script: tc.value.script,
             });
         }
 
-        let serial = raw.rack.value.serial.map(|v| match v {
+        let text = |v: Value| match v {
             Value::String(s) => s,
             other => other.to_string(),
-        });
+        };
+        let serial = raw.rack.value.serial.map(text);
+        let environment =
+            raw.environment.unwrap_or_default().into_iter().map(|(k, v)| (k, text(v))).collect();
         issues.finish(
             file.clone(),
             StationConfig {
                 id,
                 description: raw.station.value.description.unwrap_or_default(),
-                rack: RackReference { config, serial },
+                rack: RackReference { config, serial, url: raw.rack.value.url },
                 uut_url,
                 test_cases,
+                environment,
                 source_path: file,
             },
         )
@@ -181,6 +200,25 @@ impl StationConfig {
     /// Looks up a test case by id.
     pub fn test_case(&self, id: &str) -> Option<&TestCaseEntry> {
         self.test_cases.iter().find(|t| t.id == id)
+    }
+
+    /// The script for a test case: its `script:` (relative to the station
+    /// file), else the first existing `<id>.py` in the station directory,
+    /// `tests/`, `test_cases/` or `../tests/`.
+    pub fn script_path(&self, entry: &TestCaseEntry) -> Option<PathBuf> {
+        let dir = self
+            .source_path
+            .as_deref()
+            .and_then(Path::parent)
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        if let Some(s) = &entry.script {
+            return Some(dir.join(s));
+        }
+        let name = format!("{}.py", entry.id);
+        [dir.clone(), dir.join("tests"), dir.join("test_cases"), dir.join("../tests")]
+            .into_iter()
+            .map(|d| d.join(&name))
+            .find(|p| p.is_file())
     }
 }
 
@@ -213,6 +251,21 @@ mod tests {
                 && m.contains("did you mean \"hass\"")),
             "{msgs:?}"
         );
+    }
+
+    #[test]
+    fn scripts_and_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("tests")).unwrap();
+        std::fs::write(dir.path().join("tests/auto.py"), "").unwrap();
+        let path = dir.path().join("station.yaml");
+        std::fs::write(&path, "station: {id: s}\nrack: {config: r, url: 'http://rack:8000'}\nuut: {url: u}\nenvironment: {A: x, N: 3}\ntest_cases: [{id: auto}, {id: given, script: sub/g.py}, {id: missing}]\n").unwrap();
+        let s = StationConfig::from_file(&path).unwrap();
+        assert_eq!(s.script_path(&s.test_cases[0]), Some(dir.path().join("tests/auto.py")));
+        assert_eq!(s.script_path(&s.test_cases[1]), Some(dir.path().join("sub/g.py")));
+        assert_eq!(s.script_path(&s.test_cases[2]), None);
+        assert_eq!(s.environment["N"], "3");
+        assert_eq!(s.rack.url.as_deref(), Some("http://rack:8000"));
     }
 
     #[test]

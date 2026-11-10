@@ -338,6 +338,13 @@ impl Rack {
         Ok((inst, ch))
     }
 
+    /// The kind of a logical channel, as reported by its (ready) instrument.
+    pub fn channel_kind(&self, name: &str) -> Option<ChannelKind> {
+        let (inst, _) = self.channel(name).ok()?;
+        let i = lock(&inst);
+        Self::kind_of(i.as_ref(), name)
+    }
+
     fn kind_of(inst: &dyn Instrument, name: &str) -> Option<ChannelKind> {
         inst.channels().into_iter().find(|c| c.name == name).map(|c| c.kind)
     }

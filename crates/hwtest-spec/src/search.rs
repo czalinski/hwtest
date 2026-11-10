@@ -34,6 +34,20 @@ pub fn rack_instance_search_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// Search directories for rack class files: `extra` (e.g. the test
+/// definition's directory and its `configs/` sibling), `.`, `./configs`, then
+/// `$HWTEST_RACK_PATH`.
+pub fn rack_search_paths(extra: &[PathBuf]) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut paths = extra.to_vec();
+    paths.push(cwd.clone());
+    paths.push(cwd.join("configs"));
+    if let Ok(env) = std::env::var("HWTEST_RACK_PATH") {
+        paths.extend(split_path_list(&env));
+    }
+    paths
+}
+
 /// Returns the first `dir/name` that is a file, trying names in order within
 /// each directory.
 pub fn find_first(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {

@@ -14,6 +14,7 @@ mod bounds;
 mod common;
 mod conv;
 mod records;
+mod sdk;
 mod spec;
 mod streaming;
 
@@ -65,5 +66,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spec::find_definition_file, m)?)?;
     m.add_function(wrap_pyfunction!(spec::load_definition, m)?)?;
     m.add_function(wrap_pyfunction!(spec::check_definitions, m)?)?;
+    m.add_function(wrap_pyfunction!(spec::check_spec_files, m)?)?;
+
+    m.add_class::<sdk::PyRack>()?;
+    m.add_class::<sdk::PySession>()?;
+    m.add("HardwareError", m.py().get_type::<sdk::HardwareError>())?;
+    m.add_function(wrap_pyfunction!(sdk::parse_event_line, m)?)?;
+    m.add_function(wrap_pyfunction!(sdk::_roundtrip, m)?)?;
     Ok(())
 }

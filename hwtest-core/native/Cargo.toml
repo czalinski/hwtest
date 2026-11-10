@@ -18,6 +18,9 @@ doctest = false
 [dependencies]
 hwtest-core.workspace = true
 hwtest-spec.workspace = true
+hwtest-run.workspace = true
+hwtest-rack.workspace = true
+hwtest-instruments.workspace = true
 pyo3.workspace = true
 indexmap.workspace = true
 serde.workspace = true
