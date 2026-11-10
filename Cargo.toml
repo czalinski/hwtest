@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/hwtest-core", "crates/hwtest-spec", "hwtest-core/native"]
+members = ["crates/*", "hwtest-core/native"]
 # `cargo test` / `cargo clippy` at the root exercise the pure-Rust crates.
 # The PyO3 extension is built by maturin (`pip install -e ./hwtest-core`).
-default-members = ["crates/hwtest-core", "crates/hwtest-spec"]
+default-members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,15 +15,26 @@ repository = "https://github.com/czalinski/hwtest"
 [workspace.dependencies]
 hwtest-core = { path = "crates/hwtest-core" }
 hwtest-spec = { path = "crates/hwtest-spec" }
+hwtest-nats = { path = "crates/hwtest-nats" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = { version = "2", features = ["serde"] }
 crc32fast = "1"
 thiserror = "2"
 pyo3 = { version = "0.30", features = ["abi3-py310", "multiple-pymethods"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "signal", "fs"] }
+async-nats = "0.52"
+futures = "0.3"
+bytes = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tempfile = "3"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Only FFI modules may opt out (with a justification); see docs/coding-requirements.md.
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]

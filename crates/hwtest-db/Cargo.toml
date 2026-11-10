@@ -1,0 +1,19 @@
+[package]
+name = "hwtest-db"
+description = "SQLite test results database for hwtest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

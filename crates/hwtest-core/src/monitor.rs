@@ -7,6 +7,7 @@ use crate::bounds::BoundCheck;
 use crate::common::{ChannelId, MonitorId, StateId, Timestamp};
 use crate::error::Result;
 use crate::state::{default_source, nullable_f64, EnvironmentalState};
+use crate::streaming::{StreamData, StreamSchema};
 use crate::threshold::{Threshold, ThresholdBound};
 
 /// Outcome of one monitor evaluation.
@@ -297,6 +298,72 @@ impl BoundsMonitor {
             format!("All {checked} field(s) within bounds for {}", state.name),
         )
     }
+
+    /// Evaluates every sample of a stream batch and summarises the batch in
+    /// one result.
+    ///
+    /// Each sample is checked at its own timestamp. The batch fails if any
+    /// sample fails; at most `max_violations` violations are kept (the message
+    /// reports the total). A batch with no checked fields is `Skip`.
+    pub fn evaluate_batch(
+        &mut self,
+        schema: &StreamSchema,
+        data: &StreamData,
+        state: &EnvironmentalState,
+        max_violations: usize,
+    ) -> MonitorResult {
+        let fields: Vec<&str> = schema.fields().iter().map(|f| f.name.as_str()).collect();
+        let start = Timestamp::local(i64::try_from(data.timestamp_ns).unwrap_or(i64::MAX));
+        let mut violations = Vec::new();
+        let mut failed_samples = 0usize;
+        let mut first_fail: Option<Timestamp> = None;
+        let mut last: Option<MonitorResult> = None;
+        for (i, sample) in data.samples.iter().enumerate() {
+            let ts = Timestamp::local(i64::try_from(data.timestamp(i as u64)).unwrap_or(i64::MAX));
+            let lookup = |f: &str| {
+                fields.iter().position(|n| *n == f).and_then(|i| sample.get(i)).map(|v| v.as_f64())
+            };
+            let r = self.evaluate(lookup, state, &ts);
+            if r.verdict == MonitorVerdict::Fail {
+                failed_samples += 1;
+                first_fail.get_or_insert(ts);
+                let room = max_violations.saturating_sub(violations.len());
+                violations.extend(r.violations.iter().take(room).cloned());
+            }
+            last = Some(r);
+        }
+        let Some(last) = last else {
+            return MonitorResult {
+                monitor_id: self.monitor_id.clone(),
+                verdict: MonitorVerdict::Skip,
+                timestamp: start,
+                state_id: state.state_id.clone(),
+                violations: Vec::new(),
+                message: "Empty batch".to_string(),
+            };
+        };
+        if failed_samples == 0 {
+            let message = match last.verdict {
+                MonitorVerdict::Pass => {
+                    format!("{} sample(s) within bounds for {}", data.samples.len(), state.name)
+                }
+                _ => last.message,
+            };
+            return MonitorResult { timestamp: start, message, ..last };
+        }
+        let first = violations.first().map_or(String::new(), |v| v.message.clone());
+        MonitorResult {
+            monitor_id: self.monitor_id.clone(),
+            verdict: MonitorVerdict::Fail,
+            timestamp: first_fail.unwrap_or(start),
+            state_id: state.state_id.clone(),
+            violations,
+            message: format!(
+                "Failed: {failed_samples} of {} sample(s) out of bounds (first: {first})",
+                data.samples.len()
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -395,6 +462,51 @@ mod tests {
         let r = m.evaluate(values(&[("mode", 5.0)]), &state("s"), &Timestamp::local(0));
         assert_eq!(r.message, "Failed: mode=5.0000 failed good_values check");
         assert_eq!((r.violations[0].threshold.low, r.violations[0].threshold.high), (None, None));
+    }
+
+    #[test]
+    fn batch_evaluation_summarises_samples() {
+        use crate::common::DataType;
+        use crate::streaming::{StreamField, StreamSchema};
+        let schema = StreamSchema::new(
+            "daq",
+            vec![
+                StreamField::new("v", DataType::F64, "V"),
+                StreamField::new("i", DataType::F64, "A"),
+            ],
+        );
+        let data = StreamData {
+            schema_id: schema.schema_id(),
+            timestamp_ns: 1_000,
+            period_ns: 10,
+            samples: vec![
+                vec![4.0.into(), 1.0.into()],
+                vec![3.0.into(), 2.5.into()],
+                vec![4.1.into(), 3.0.into()],
+            ],
+        };
+        let mut m = echo_monitor();
+        let r = m.evaluate_batch(&schema, &data, &state("high"), 2);
+        assert_eq!(r.verdict, MonitorVerdict::Fail);
+        assert_eq!(r.timestamp, Timestamp::local(1_010)); // second sample
+        assert_eq!(r.violations.len(), 2); // capped
+        assert!(
+            r.message.starts_with("Failed: 2 of 3 sample(s) out of bounds (first: v=3.0000"),
+            "{}",
+            r.message
+        );
+
+        let ok = StreamData { samples: vec![vec![4.0.into(), 1.0.into()]], ..data.clone() };
+        let r = m.evaluate_batch(&schema, &ok, &state("high"), 2);
+        assert_eq!(
+            (r.verdict, r.message.as_str()),
+            (MonitorVerdict::Pass, "1 sample(s) within bounds for HIGH")
+        );
+        let empty = StreamData { samples: vec![], ..data };
+        assert_eq!(
+            m.evaluate_batch(&schema, &empty, &state("high"), 2).verdict,
+            MonitorVerdict::Skip
+        );
     }
 
     #[test]
