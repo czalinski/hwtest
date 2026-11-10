@@ -14,6 +14,7 @@ mod bounds;
 mod common;
 mod conv;
 mod records;
+mod spec;
 mod streaming;
 
 use pyo3::prelude::*;
@@ -54,5 +55,15 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bounds::PyBadValues>()?;
     m.add_class::<bounds::PySpecial>()?;
     m.add_function(wrap_pyfunction!(bounds::bound_check_from_dict, m)?)?;
+
+    m.add_class::<spec::PyTestCaseInfo>()?;
+    m.add_class::<spec::PyMonitorState>()?;
+    m.add_class::<spec::PyMonitorDef>()?;
+    m.add_class::<spec::PyLoggerDef>()?;
+    m.add_class::<spec::PyTestDefinition>()?;
+    m.add_class::<spec::PyMonitor>()?;
+    m.add_function(wrap_pyfunction!(spec::find_definition_file, m)?)?;
+    m.add_function(wrap_pyfunction!(spec::load_definition, m)?)?;
+    m.add_function(wrap_pyfunction!(spec::check_definitions, m)?)?;
     Ok(())
 }

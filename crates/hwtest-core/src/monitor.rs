@@ -1,11 +1,13 @@
 //! Monitor verdicts and results.
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use crate::bounds::BoundCheck;
 use crate::common::{ChannelId, MonitorId, StateId, Timestamp};
 use crate::error::Result;
-use crate::state::{default_source, nullable_f64};
-use crate::threshold::Threshold;
+use crate::state::{default_source, nullable_f64, EnvironmentalState};
+use crate::threshold::{Threshold, ThresholdBound};
 
 /// Outcome of one monitor evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -123,10 +125,282 @@ impl From<MonitorResultWire> for MonitorResult {
     }
 }
 
+/// Bound checks per environmental state and field.
+///
+/// The reserved state [`StateBounds::DEFAULT_STATE`] (`"default"`) supplies
+/// the bound for any state that does not list the field itself.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StateBounds {
+    states: IndexMap<StateId, IndexMap<String, BoundCheck>>,
+}
+
+impl StateBounds {
+    /// Name of the fallback state.
+    pub const DEFAULT_STATE: &'static str = "default";
+
+    /// Wraps a `state -> field -> bound` map.
+    pub fn new(states: IndexMap<StateId, IndexMap<String, BoundCheck>>) -> Self {
+        Self { states }
+    }
+
+    /// The underlying map, in definition order.
+    pub fn states(&self) -> &IndexMap<StateId, IndexMap<String, BoundCheck>> {
+        &self.states
+    }
+
+    /// True if no bounds are defined.
+    pub fn is_empty(&self) -> bool {
+        self.states.values().all(IndexMap::is_empty)
+    }
+
+    /// The bound for `field` in `state`, falling back to the default state.
+    pub fn get(&self, state: &str, field: &str) -> Option<&BoundCheck> {
+        self.states
+            .get(state)
+            .and_then(|b| b.get(field))
+            .or_else(|| self.states.get(Self::DEFAULT_STATE).and_then(|b| b.get(field)))
+    }
+
+    fn get_mut(&mut self, state: &str, field: &str) -> Option<&mut BoundCheck> {
+        let in_state = self.states.get(state).is_some_and(|b| b.contains_key(field));
+        let key = if in_state { state } else { Self::DEFAULT_STATE };
+        self.states.get_mut(key).and_then(|b| b.get_mut(field))
+    }
+
+    /// Every field that has a bound in any state, in first-seen order.
+    pub fn fields(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for field in self.states.values().flat_map(IndexMap::keys) {
+            if !out.contains(&field.as_str()) {
+                out.push(field);
+            }
+        }
+        out
+    }
+}
+
+/// Converts a bound's acceptance interval into a [`Threshold`] for reporting.
+/// Infinite sides are left open (JSON cannot represent infinity).
+pub fn bound_to_threshold(channel: &str, bound: &BoundCheck) -> Threshold {
+    let side = |v: f64, exclusive: bool| {
+        v.is_finite().then(|| {
+            if exclusive {
+                ThresholdBound::exclusive(v)
+            } else {
+                ThresholdBound::inclusive(v)
+            }
+        })
+    };
+    let (low, high) = match bound {
+        BoundCheck::LessThan(b) => (None, side(b.limit(), true)),
+        BoundCheck::GreaterThan(b) => (side(b.limit(), true), None),
+        other => {
+            other.interval().map_or((None, None), |(lo, hi)| (side(lo, false), side(hi, false)))
+        }
+    };
+    Threshold::new(channel, low, high)
+}
+
+/// Evaluates measurements against state-dependent [`StateBounds`].
+///
+/// Stateful: `within_baseline` checks lock their baseline on first pass.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundsMonitor {
+    /// Monitor identifier used in results.
+    pub monitor_id: MonitorId,
+    bounds: StateBounds,
+}
+
+impl BoundsMonitor {
+    /// Creates a monitor.
+    pub fn new(monitor_id: impl Into<MonitorId>, bounds: StateBounds) -> Self {
+        Self { monitor_id: monitor_id.into(), bounds }
+    }
+
+    /// The configured bounds (including any locked baselines).
+    pub fn bounds(&self) -> &StateBounds {
+        &self.bounds
+    }
+
+    /// Evaluates the values available through `value_of` in `state`.
+    ///
+    /// - Transition states are skipped (`Skip`).
+    /// - Fields without a value, without a bound, or bound to `special: any`
+    ///   are not checked.
+    /// - Any failing check gives `Fail` with one violation per field;
+    ///   nothing checked gives `Skip`; otherwise `Pass`.
+    pub fn evaluate(
+        &mut self,
+        value_of: impl Fn(&str) -> Option<f64>,
+        state: &EnvironmentalState,
+        timestamp: &Timestamp,
+    ) -> MonitorResult {
+        let result = |verdict, violations, message| MonitorResult {
+            monitor_id: self.monitor_id.clone(),
+            verdict,
+            timestamp: timestamp.clone(),
+            state_id: state.state_id.clone(),
+            violations,
+            message,
+        };
+        if state.is_transition {
+            return result(
+                MonitorVerdict::Skip,
+                Vec::new(),
+                "Skipping evaluation during state transition".to_string(),
+            );
+        }
+
+        let fields: Vec<String> = self.bounds.fields().into_iter().map(str::to_owned).collect();
+        let mut violations = Vec::new();
+        let (mut checked, mut skipped) = (0usize, 0usize);
+        for field in &fields {
+            let Some(measured) = value_of(field) else { continue };
+            let Some(bound) = self.bounds.get_mut(&state.state_id, field) else {
+                skipped += 1;
+                continue;
+            };
+            if bound.is_any() {
+                skipped += 1;
+                continue;
+            }
+            checked += 1;
+            if !bound.check(measured) {
+                let message = match bound.interval() {
+                    Some((lo, hi)) => format!("{field}={measured:.4} outside [{lo:.4}, {hi:.4}]"),
+                    None => format!("{field}={measured:.4} failed {} check", bound.key()),
+                };
+                violations.push(ThresholdViolation {
+                    channel: field.clone(),
+                    value: measured,
+                    threshold: bound_to_threshold(field, bound),
+                    message,
+                });
+            }
+        }
+
+        if !violations.is_empty() {
+            let summary: Vec<&str> = violations.iter().map(|v| v.message.as_str()).collect();
+            let message = format!("Failed: {}", summary.join("; "));
+            return result(MonitorVerdict::Fail, violations, message);
+        }
+        if checked == 0 {
+            return result(
+                MonitorVerdict::Skip,
+                Vec::new(),
+                format!("No fields to check (skipped {skipped})"),
+            );
+        }
+        result(
+            MonitorVerdict::Pass,
+            Vec::new(),
+            format!("All {checked} field(s) within bounds for {}", state.name),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::threshold::ThresholdBound;
+    use serde_json::json;
+
+    fn bounds(spec: &serde_json::Value) -> StateBounds {
+        let mut states = IndexMap::new();
+        for (state, fields) in spec.as_object().unwrap() {
+            let mut m = IndexMap::new();
+            for (field, b) in fields.as_object().unwrap() {
+                m.insert(field.clone(), BoundCheck::from_json(b).unwrap());
+            }
+            states.insert(state.clone(), m);
+        }
+        StateBounds::new(states)
+    }
+
+    fn state(id: &str) -> EnvironmentalState {
+        EnvironmentalState::new(id, id.to_uppercase(), "")
+    }
+
+    fn values<'a>(pairs: &'a [(&'a str, f64)]) -> impl Fn(&str) -> Option<f64> + 'a {
+        move |f| pairs.iter().find(|(k, _)| *k == f).map(|(_, v)| *v)
+    }
+
+    fn echo_monitor() -> BoundsMonitor {
+        BoundsMonitor::new(
+            "echo",
+            bounds(&json!({
+                "default": {"v": {"special": "any"}},
+                "low": {"v": {"within_range": [1.0, 0.3]}},
+                "high": {"v": {"within_range": [4.0, 0.3]}, "i": {"less_than": 2.0}},
+            })),
+        )
+    }
+
+    #[test]
+    fn pass_fail_skip_like_python() {
+        let mut m = echo_monitor();
+        let ts = Timestamp::local(1);
+        let r = m.evaluate(values(&[("v", 1.1)]), &state("low"), &ts);
+        assert_eq!(r.verdict, MonitorVerdict::Pass);
+        assert_eq!(r.message, "All 1 field(s) within bounds for LOW");
+
+        let r = m.evaluate(values(&[("v", 3.0), ("i", 2.5)]), &state("high"), &ts);
+        assert_eq!(r.verdict, MonitorVerdict::Fail);
+        assert_eq!(
+            r.message,
+            "Failed: v=3.0000 outside [3.7000, 4.3000]; i=2.5000 outside [-inf, 2.0000]"
+        );
+        assert_eq!(r.violations[1].threshold.high, Some(ThresholdBound::exclusive(2.0)));
+        assert_eq!(r.violations[1].threshold.low, None);
+
+        // State without own bounds falls back to default -> special: any -> skipped.
+        let r = m.evaluate(values(&[("v", 99.0)]), &state("other"), &ts);
+        assert_eq!(
+            (r.verdict, r.message.as_str()),
+            (MonitorVerdict::Skip, "No fields to check (skipped 1)")
+        );
+
+        let mut transition = state("low");
+        transition.is_transition = true;
+        assert_eq!(
+            m.evaluate(values(&[("v", 99.0)]), &transition, &ts).verdict,
+            MonitorVerdict::Skip
+        );
+    }
+
+    #[test]
+    fn violation_results_serialize() {
+        // The Python monitor crashed building violations; these must round-trip.
+        let mut m = echo_monitor();
+        let r = m.evaluate(values(&[("i", 3.0), ("v", 4.0)]), &state("high"), &Timestamp::local(0));
+        let back = MonitorResult::from_json_bytes(&r.to_json_bytes().unwrap()).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn baseline_locks_per_state_entry() {
+        let mut m =
+            BoundsMonitor::new("b", bounds(&json!({"s": {"t": {"within_baseline": [25, 5, 1]}}})));
+        let ts = Timestamp::local(0);
+        assert!(m.evaluate(values(&[("t", 27.0)]), &state("s"), &ts).passed());
+        assert!(m.evaluate(values(&[("t", 27.9)]), &state("s"), &ts).passed());
+        assert!(m.evaluate(values(&[("t", 29.0)]), &state("s"), &ts).failed());
+        let locked = m.bounds().get("s", "t").unwrap().to_json();
+        assert_eq!(locked, json!({"within_baseline": [25.0, 5.0, 1.0, 27.0]}));
+    }
+
+    #[test]
+    fn non_interval_violation_message() {
+        let mut m =
+            BoundsMonitor::new("m", bounds(&json!({"s": {"mode": {"good_values": [0, 1]}}})));
+        let r = m.evaluate(values(&[("mode", 5.0)]), &state("s"), &Timestamp::local(0));
+        assert_eq!(r.message, "Failed: mode=5.0000 failed good_values check");
+        assert_eq!((r.violations[0].threshold.low, r.violations[0].threshold.high), (None, None));
+    }
+
+    #[test]
+    fn fields_in_first_seen_order() {
+        assert_eq!(echo_monitor().bounds().fields(), vec!["v", "i"]);
+    }
 
     #[test]
     fn result_round_trip_and_flags() {

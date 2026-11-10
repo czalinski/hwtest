@@ -8,7 +8,7 @@ hwtest is a monorepo for hardware test automation tools designed for HASS (Highl
 
 **Language split** (see `docs/coding-requirements.md`): ALL framework code is moving to **Rust** in `crates/`, exposed to Python via **PyO3**. The only Python kept is **test cases for specific hardware**, written by hardware test engineers/designers (not software developers) as short, **synchronous** top-level scripts; specs and bounds are **YAML**. The Python script is the process entry point and imports the Rust core; the runner launches scripts as subprocesses. Drivers are Rust, with a YAML-selectable Python driver escape hatch for one-off instruments. The Rust crates are the single source of truth — don't add framework logic in Python.
 
-**Migration plan:** 0) aarch64 cross-builds for the Pis → 1) test definitions + monitor engine + rack config (`hwtest-testcase`) → 2) NATS streaming, loggers, results DB → 3) rack + instrument drivers (MCC via libdaqhats FFI, Waveshare, SCPI/BK) → 4) rack & runner services → 5) UUT simulator. Work is committed straight to `main`.
+**Migration plan:** 0) aarch64 cross-builds for the Pis ✅ → 1) test definitions + monitor engine + rack/instance/station YAML ✅ → 2) NATS streaming, loggers, results DB → 3) rack + instrument drivers (MCC via libdaqhats FFI, Waveshare, SCPI/BK) → 4) rack & runner services → 5) UUT simulator. Work is committed straight to `main`.
 
 ## Build and Development Commands
 
@@ -68,6 +68,7 @@ python3 -m pylint src/
 
 ```
 crates/hwtest-core  (pure Rust: serde, serde_json, crc32fast; no PyO3)
+crates/hwtest-spec  (pure Rust: YAML specs via serde-saphyr; depends on hwtest-core)
 hwtest-core  (Python package = PyO3 extension over crates/hwtest-core; no Python deps)
   ├── hwtest-scpi  (depends on hwtest-core; optional pyvisa)
   │     └── hwtest-bkprecision  (depends on hwtest-scpi)
@@ -93,6 +94,16 @@ Implemented in Rust. Layout:
 - `hwtest-core/src/hwtest_core/_enums.py`: `DataType`, `ValueQuality`, `BoundType`, `MonitorVerdict` stay Python `Enum`s (mirrored in Rust, converted by value). `errors.py` exceptions are raised from Rust via `import_exception!`.
 - Classes are immutable (frozen pyclasses) except `WithinBaseline`; `to_dict`/`from_dict`/`to_bytes`/`from_bytes` go through one serde schema.
 - Intentional differences from the old Python code are listed in `hwtest-core/README.md` (fail-closed on NaN/inf, unknown `special` kinds rejected, NaN as JSON `null`, exact datetime conversion).
+
+### YAML Specifications (crates/hwtest-spec → `hwtest_core.spec`)
+
+All engineer-facing YAML is parsed and validated in Rust (`serde-saphyr`, YAML 1.2). Errors list **every** problem with `file:line:col: key.path: message` and "did you mean" suggestions; raised in Python as `hwtest_core.errors.SpecError` (a `ValueError`), missing files as `FileNotFoundError`.
+- `testdef.rs`: test definitions (`test_case`, `rack`, `case_parameters`, `monitor_states` — extra keys are state parameters, `state_sequence`, `monitors` with `kwargs`/`kwargs.N` slots and per-state `configuration` bounds incl. `default`, `loggers`, `functional_requirements`). Monitors/loggers accept `kind: bounds|csv|influxdb` or legacy `module:`/`class:` (known legacy classes map to built-ins; others are kept as Python escape-hatch kinds). Logger kwargs `${VAR}`/`${VAR:default}` resolve via `resolved_kwargs()`.
+- `rack.rs` (rack classes, logical channel registry, duplicate-name check), `instance.rs` (per-serial calibration load/save/find), `station.rs` (runner stations). Not yet bound to Python — `hwtest_rack`/`hwtest_runner` still parse these themselves until Phases 3–4.
+- Monitor engine: `hwtest_core::monitor::{StateBounds, BoundsMonitor}`; Python `hwtest_core.spec.Monitor` (re-exported as `hwtest_testcase.Monitor`).
+- `hwtest_testcase.definition`/`monitor` are re-exports of `hwtest_core.spec`. Classes named `Test*` set `__test__ = False` so pytest doesn't collect them.
+- Validate files: `cargo run -p hwtest-spec --example check_spec -- path/to/*.yaml`, or `hwtest_core.spec.check_definitions([...])`.
+- All bindings live in the single `hwtest_core._native` extension: PyO3 classes cannot be shared across separate extension modules.
 
 **Types** (`src/hwtest_core/types/`):
 - `common.py`: Timestamp (nanosecond precision), SourceId, ChannelId, StateId, DataType enum, InstrumentIdentity

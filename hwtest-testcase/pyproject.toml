@@ -24,7 +24,6 @@ classifiers = [
 
 dependencies = [
     "hwtest-core",
-    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -59,4 +58,5 @@ warn_unused_configs = true
 max-line-length = 100
 disable = [
     "too-few-public-methods",
+    "duplicate-code",  # Re-exports of hwtest_core.spec in __init__.py are intentional
 ]

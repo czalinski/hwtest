@@ -12,6 +12,7 @@ use serde_json::{Map, Number, Value};
 
 pyo3::import_exception!(hwtest_core.errors, ThresholdError);
 pyo3::import_exception!(hwtest_core.errors, SerializationError);
+pyo3::import_exception!(hwtest_core.errors, SpecError);
 
 /// Maps a core error onto the Python exception hierarchy.
 pub fn to_pyerr(err: hwtest_core::Error) -> PyErr {

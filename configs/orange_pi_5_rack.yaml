@@ -58,7 +58,7 @@ instruments:
         - id: 2
           name: "supply_voltage"
         - id: 3
-          name: "reference_voltage"
+          name: "reference_voltage_sense"
 
   thermocouple_daq:
     driver: "hwtest_mcc.mcc134:create_instrument"

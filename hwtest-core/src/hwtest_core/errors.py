@@ -11,6 +11,7 @@ Exception hierarchy:
     +-- SchemaError: Schema validation failures
     +-- StateError: State machine violations
     +-- ThresholdError: Threshold configuration errors
+    +-- SpecError: Invalid YAML specification (also a ValueError)
 """
 
 
@@ -60,4 +61,14 @@ class ThresholdError(HwtestError):
 
     This includes invalid bound configurations, negative tolerances, or
     other threshold specification errors.
+    """
+
+
+class SpecError(HwtestError, ValueError):
+    """Raised when a YAML specification (test definition, rack, station) is invalid.
+
+    The message lists every problem found, each with file, line, column and
+    the YAML key path, for example::
+
+        voltage_echo.yaml:41:9: state_sequence[1]: unknown state "midle" (...)
     """

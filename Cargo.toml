@@ -1,19 +1,20 @@
 [workspace]
 resolver = "2"
-members = ["crates/hwtest-core", "hwtest-core/native"]
+members = ["crates/hwtest-core", "crates/hwtest-spec", "hwtest-core/native"]
 # `cargo test` / `cargo clippy` at the root exercise the pure-Rust crates.
 # The PyO3 extension is built by maturin (`pip install -e ./hwtest-core`).
-default-members = ["crates/hwtest-core"]
+default-members = ["crates/hwtest-core", "crates/hwtest-spec"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.89"
 license = "Unlicense"
 repository = "https://github.com/czalinski/hwtest"
 
 [workspace.dependencies]
 hwtest-core = { path = "crates/hwtest-core" }
+hwtest-spec = { path = "crates/hwtest-spec" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = { version = "2", features = ["serde"] }

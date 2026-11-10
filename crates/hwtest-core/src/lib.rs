@@ -12,7 +12,7 @@
 //! - [`state`]: environmental states and transitions
 //! - [`threshold`]: low/high threshold definitions per state
 //! - [`bounds`]: YAML/JSON-configurable bound checks (`{"within_range": [3.3, 0.1]}`)
-//! - [`monitor`]: monitor verdicts and results
+//! - [`monitor`]: the bounds monitor engine, verdicts and results
 //!
 //! JSON representations are byte-compatible with the original Python
 //! implementation; `tests/python_compat.rs` checks this against golden
@@ -35,7 +35,7 @@ pub use common::{
     ChannelId, DataType, InstrumentIdentity, MonitorId, SourceId, StateId, Timestamp,
 };
 pub use error::{Error, Result};
-pub use monitor::{MonitorResult, MonitorVerdict, ThresholdViolation};
+pub use monitor::{BoundsMonitor, MonitorResult, MonitorVerdict, StateBounds, ThresholdViolation};
 pub use state::{EnvironmentalState, StateTransition};
 pub use streaming::{SampleValue, StreamData, StreamField, StreamSchema};
 pub use telemetry::{TelemetryMessage, TelemetryValue, ValueQuality};
