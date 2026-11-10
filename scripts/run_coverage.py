@@ -39,16 +39,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 # All packages in the monorepo
 PACKAGES = [
     "hwtest-core",
-    "hwtest-scpi",
-    "hwtest-bkprecision",
-    "hwtest-mcc",
-    "hwtest-waveshare",
-    "hwtest-sim-pi4-waveshare",
-    "hwtest-rack",
-    "hwtest-logger",
-    "hwtest-db",
-    "hwtest-nats",
-    "hwtest-testcase",
+    "hwtest-sdk",
     "hwtest-intg",
 ]
 
@@ -148,10 +139,10 @@ def run_pytest_with_coverage(
 
     # Add integration tests if requested
     if include_integration:
-        intg_path = PROJECT_ROOT / "hwtest-intg" / "tests" / "integration"
+        intg_path = PROJECT_ROOT / "hwtest-intg" / "tests"
         if intg_path.exists():
             print(f"\n{'='*60}")
-            print("Testing: hwtest-intg (integration)")
+            print("Testing: hwtest-intg (bench scripts, emulated)")
             print(f"{'='*60}")
 
             cov_file = coverage_dir / ".coverage.intg"
@@ -161,7 +152,7 @@ def run_pytest_with_coverage(
                 sys.executable,
                 "-m",
                 "pytest",
-                "--cov",
+                f"--cov={PROJECT_ROOT / 'hwtest-intg' / 'scripts'}",
                 "--cov-report=",
                 "--cov-context=test",
                 str(intg_path),

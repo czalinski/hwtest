@@ -4,245 +4,147 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-hwtest is a monorepo for hardware test automation tools designed for HASS (Highly Accelerated Stress Screening) and HALT (Highly Accelerated Life Testing) via instrument automation. The system runs on Linux (SBCs like Orange Pi 5, Beelink, and Docker containers) with Python 3.10+ and Rust (stable, MSRV in root `Cargo.toml`).
+hwtest is a monorepo for hardware test automation for HASS (Highly Accelerated Stress Screening) and HALT (Highly Accelerated Life Testing) via instrument automation. It runs on Linux (Raspberry Pi 4/5, Orange Pi 5, Beelink, Docker) with Rust (stable, MSRV in root `Cargo.toml`) and Python 3.10+.
 
-**Language split** (see `docs/coding-requirements.md`): ALL framework code is moving to **Rust** in `crates/`, exposed to Python via **PyO3**. The only Python kept is **test cases for specific hardware**, written by hardware test engineers/designers (not software developers) as short, **synchronous** top-level scripts; specs and bounds are **YAML**. The Python script is the process entry point and imports the Rust core; the runner launches scripts as subprocesses. Drivers are Rust, with a YAML-selectable Python driver escape hatch for one-off instruments. The Rust crates are the single source of truth — don't add framework logic in Python.
+**Language split** (see `docs/coding-requirements.md`): all framework code is **Rust** in `crates/`, exposed to Python through **one PyO3 extension** (`hwtest_core._native`). The only Python is **test cases for specific hardware**, written by hardware test engineers/designers (not software developers) as short, **synchronous** scripts using the `hwtest` SDK; specs and bounds are **YAML**. The Python script is the process entry point; the Rust runner launches scripts as subprocesses. Drivers are Rust, with a YAML-selectable Python driver escape hatch for one-off instruments. Don't add framework logic in Python.
 
-**Migration plan:** 0) aarch64 cross-builds for the Pis ✅ → 1) test definitions + monitor engine + rack/instance/station YAML ✅ → 2) NATS streaming, loggers, results DB → 3) rack + instrument drivers (MCC via libdaqhats FFI, Waveshare, SCPI/BK) → 4) rack & runner services → 5) UUT simulator. Work is committed straight to `main`.
+**Migration status:** complete (Phases 0–5: aarch64 builds, YAML specs + monitor engine, NATS/loggers/results DB, drivers + rack, run engine + SDK + runner, UUT simulator + CAN). Next: integration lab (NATS, InfluxDB, results DB services) and the custom test PCB. Work is committed and pushed straight to `main`.
 
 ## Build and Development Commands
 
-Each package has its own directory. Use a shared venv or per-package venvs. Example for the full stack:
-
 ```bash
-# Rust toolchain (needed to build hwtest-core): https://rustup.rs
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# Rust toolchain: https://rustup.rs
+# Python: one venv; hwtest-core builds the Rust extension via maturin.
+# Re-run `pip install -e ./hwtest-core` after changing Rust code used by Python.
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e "./hwtest-core[dev]" -e "./hwtest-sdk[dev]"
 
-# Setup (shared venv). hwtest-core builds its Rust extension via maturin;
-# re-run `pip install -e ./hwtest-core` after changing Rust code.
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e "./hwtest-core[dev]" -e "./hwtest-scpi[dev]" -e "./hwtest-bkprecision[dev]" -e "./hwtest-mcc[dev]" -e "./hwtest-waveshare[dev]" -e "./hwtest-rack[dev]" -e "./hwtest-sim-pi4-waveshare[dev]" -e "./hwtest-logger[dev]" -e "./hwtest-db[dev]" -e "./hwtest-nats[dev]" -e "./hwtest-runner[dev]" -e "./hwtest-intg[dev]"
-
-# Rust (from repo root): tests incl. Python wire-compat fixtures, lint, format
-cargo test
-cargo clippy --workspace --all-targets
+# Rust (from repo root)
+cargo test                                  # all crates (NATS tests need HWTEST_NATS_URL)
+cargo clippy --workspace --all-targets      # pedantic, must be clean
 cargo fmt --all --check
 
-# Testing (run from each package directory)
-cd hwtest-core && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-scpi && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-bkprecision && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-mcc && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-waveshare && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-rack && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-sim-pi4-waveshare && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-logger && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-db && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-nats && python3 -m pytest tests/unit/ -v && cd ..
-cd hwtest-runner && python3 -m pytest tests/unit/ -v && cd ..
+# Python
+cd hwtest-core && python -m pytest tests/unit -q && cd ..
+cd hwtest-sdk && python -m pytest tests -q && cd ..
+cd hwtest-intg && python -m pytest tests -q && cd ..   # bench scripts, fully emulated
 
-# Integration tests (requires hardware setup)
-cd hwtest-intg && UUT_URL=http://<uut-ip>:8080 python3 -m pytest tests/integration/ -v -m integration && cd ..
+# Lint (from a Python package dir)
+python -m black --check --line-length 100 src/ tests/
+python -m mypy --strict src/
+python -m pylint src/
 
-# Single file / single test
-python3 -m pytest hwtest-core/tests/unit/test_common_types.py
-python3 -m pytest hwtest-core/tests/unit/test_common_types.py::TestTimestamp::test_now
+# Validate YAML (any kind: definitions, racks, stations, instances)
+hwtest check configs/*.yaml
+cargo run -p hwtest-spec --example check_spec -- path/to/*.yaml
 
-# Linting and formatting (run from each package directory)
-python3 -m black --check --line-length 100 src/ tests/
-python3 -m mypy --strict src/
-python3 -m pylint src/
+# Release artifacts: abi3 wheels + aarch64/x86_64 binaries into dist/ (zig cross-build)
+scripts/build_release.sh [--target aarch64|x86_64|all]
 ```
 
 ## Architecture
 
-### System Layers
+### System layers
 
-1. **Test Execution**: Test cases control environmental conditions (temperature, vibration) and UUT state
-2. **Measurement**: Instruments collect telemetry, publish to NATS JetStream (<25ms software latency budget)
-3. **Monitoring**: Monitors evaluate telemetry against state-dependent thresholds
-4. **Persistence**: Loggers archive telemetry (CSV or InfluxDB)
+1. **Test execution**: a Python script drives environmental conditions and UUT state through `hwtest`
+2. **Measurement**: instruments (Rust drivers) produce telemetry; streaming over NATS JetStream (<25 ms software latency budget)
+3. **Monitoring**: YAML bounds evaluated per environmental state in Rust; evaluation suspended during transitions
+4. **Persistence**: CSV / InfluxDB loggers, SQLite results database
 
-### Package Dependency Chain
+### Crates (`crates/`)
 
+| Crate | Contents |
+|-------|----------|
+| `hwtest-core` | Types (Timestamp, ids, InstrumentIdentity), telemetry, state, thresholds, bounds (`within_range`, `good_values`, `special`, ...; fail-closed on NaN/inf), monitor engine (`StateBounds`, `BoundsMonitor`), binary streaming protocol. Golden wire fixtures in `tests/fixtures/python_golden.json` |
+| `hwtest-spec` | All engineer-facing YAML (serde-saphyr, YAML 1.2): `testdef.rs`, `rack.rs`, `instance.rs` (per-serial calibration), `station.rs`, `env.rs` (`${VAR:default}`), `search.rs` (search paths) |
+| `hwtest-nats` | async-nats: stream publisher/subscriber (schema rebroadcast 1 s), state pub/sub, telemetry monitor |
+| `hwtest-logger` | CSV and InfluxDB (line protocol over HTTP) loggers; `hwtest-import-csv` |
+| `hwtest-db` | rusqlite results DB using `sql/test_results_schema.sql` |
+| `hwtest-instruments` | Drivers + emulators: MCC 118/134/152 (libdaqhats via libloading — the only `unsafe`, in `daqhats/ffi.rs`), Waveshare AD/DA (ADS1256/DAC8532 over spidev/gpiocdev), SCPI (TCP/serial/USBTMC) + BK 9100 PSU, SocketCAN + in-process `virtual:<name>` CAN bus, MCP23017. `registry.rs` maps rack YAML driver strings (incl. legacy `hwtest_mcc.mcc152:create_instrument`) to drivers; `HWTEST_EMULATE=1` emulates everything. Bins: `hwtest-hat-scan`, `hwtest-bk-emulator` |
+| `hwtest-rack` | Rack runtime (open/verify identities, logical channels, calibration), HTTP server + NATS streaming. Bin `hwtest-rack` (`serve`/`check`/`init`/`calibrate`/`info`/`list`; a leading `.yaml` means `serve`) |
+| `hwtest-run` | Run engine behind the SDK: `Session` (state sequence, cycles for HASS/HALT, measure → monitors → loggers/NATS/DB, transitions, stop/abort), event lines `@@hwtest {json}` on stdout |
+| `hwtest-runner` | Station web service: operator picks test + mode, runner spawns the script (env `HWTEST_EVENTS/MODE/RUN_ID/RACK/RACK_SERIAL`, `UUT_URL`, station `environment:`), stop = SIGINT then SIGKILL. Bin `hwtest-runner station.yaml` |
+| `hwtest-uut-sim` | UUT simulator (Pi 4 + Waveshare AD/DA + CAN HAT, or `--emulate`): CAN heartbeat 0x100 @10 Hz + echo, DAC/ADC, MCP23017 GPIO, fault injection; same REST API as the old Python simulator plus `/emulation/*`; blocking `UutClient`; `BackgroundServer` for embedding. Bins `hwtest-uut-sim`, `pi4-waveshare-sim` |
+
+### Python packages
+
+- **`hwtest-core/`** — the PyO3 extension. `native/src/` holds bindings only (`conv.rs`, one file per domain, `spec.rs`, `sdk.rs`), built by maturin as `hwtest_core._native` (abi3-py310, `multiple-pymethods`). `src/hwtest_core/types/*.py` re-export native classes; `_enums.py` (`DataType`, `ValueQuality`, `BoundType`, `MonitorVerdict`) and `errors.py` stay Python and are raised from Rust via `import_exception!`. `_native.pyi` holds the stubs — **keep it in sync with the bindings**. Classes are frozen pyclasses except `WithinBaseline`. Intentional differences from the original Python are in `hwtest-core/README.md`.
+- **`hwtest-sdk/`** (distribution `hwtest`) — what test scripts import: `Test` (definition YAML + `@test.setup/step/teardown`, `run()`, `main()` CLI with `--mode/--cycles/--serial/--emulate/--nats/--db/--unit/--offsite/--no-loggers`), `Context` (`ctx.rack`, `ctx.uut`, `ctx.can`, `ctx.param`, `ctx.calibration`, `ctx.measure`, `ctx.transition`, `ctx.sleep`, `ctx.log`), `State` (YAML state parameters as attributes), `Rack`, `CanBus`, `UutClient`, `UutSimulator`, `HardwareError`; `hwtest check` / `hwtest run` CLI. Classes named `Test*` set `__test__ = False`.
+- **`hwtest-intg/`** — test cases for the integration bench (not a package): `configs/` (rack, station, definitions) + `scripts/` + `tests/test_bench_emulated.py`. See its README.
+
+### Writing a test case
+
+```yaml
+# configs/voltage_echo_monitor.yaml (abridged)
+test_case: {id: voltage_echo_monitor, name: Voltage Echo Monitor Test}
+rack: pi5_mcc_intg_a_rack
+case_parameters: {settling_time_seconds: 0.025}
+monitor_states:
+  minimum: {name: Minimum Voltage, target_voltage: 1.0}
+  maximum: {name: Maximum Voltage, target_voltage: 4.0}
+monitors:
+  echo_voltage_monitor:
+    kind: bounds
+    kwargs.0: {}                        # judges the UUT in slot 0
+    configuration:
+      minimum: {echo_voltage: {within_range: [1.0, 0.30]}}
+      maximum: {echo_voltage: {within_range: [4.0, 0.30]}}
+loggers:
+  csv_logger: {kind: csv, kwargs: {output_dir: "${CSV_LOG_DIR:./logs}"}}
+  influx: {kind: influxdb, enabled: "${TELEMETRY_ENABLED:false}", kwargs: {...}}
 ```
-crates/hwtest-core  (pure Rust: serde, serde_json, crc32fast; no PyO3)
-crates/hwtest-spec  (pure Rust: YAML specs via serde-saphyr; depends on hwtest-core)
-hwtest-core  (Python package = PyO3 extension over crates/hwtest-core; no Python deps)
-  ├── hwtest-scpi  (depends on hwtest-core; optional pyvisa)
-  │     └── hwtest-bkprecision  (depends on hwtest-scpi)
-  ├── hwtest-mcc  (depends on hwtest-core; optional daqhats)
-  ├── hwtest-waveshare  (depends on hwtest-core; optional spidev, lgpio)
-  │     └── hwtest-sim-pi4-waveshare  (depends on hwtest-waveshare; fastapi, uvicorn, python-can, smbus2)
-  ├── hwtest-rack  (depends on hwtest-core; fastapi, uvicorn, pyyaml)
-  ├── hwtest-logger  (depends on hwtest-core; optional influxdb-client)
-  ├── hwtest-db  (aiosqlite; test results persistence)
-  ├── hwtest-nats  (depends on hwtest-core; nats-py)
-  ├── hwtest-testcase  (depends on hwtest-core; optional hwtest-nats)
-  ├── hwtest-runner  (depends on hwtest-core, hwtest-testcase, hwtest-rack; fastapi, uvicorn, httpx, pyyaml)
-  └── hwtest-intg  (depends on hwtest-core, hwtest-rack; python-can, httpx, pytest)
+
+```python
+import hwtest
+test = hwtest.Test("voltage_echo_monitor.yaml")
+
+@test.step
+def echo(ctx, state):
+    ctx.rack.write("rack_dac", state.target_voltage)
+    ctx.sleep(ctx.param("settling_time_seconds"))
+    ctx.uut.dac_write(0, ctx.uut.adc_read(0))
+    ctx.measure(echo_voltage=ctx.rack.read("rack_adc"))
+
+if __name__ == "__main__":
+    test.main()        # python script.py --mode hass --serial 001 [--emulate]
 ```
 
-### Core Library (hwtest-core)
+YAML errors list **every** problem as `file:line:col: key.path: message` with "did you mean" suggestions (`SpecError`, a `ValueError`). Measurements are published under topic = test case id unless `ctx.measure(topic=...)`. Results DB slots are numbered from 1; YAML `kwargs.N` from 0 (mapped N+1).
 
-Implemented in Rust. Layout:
-- `crates/hwtest-core/src/`: the implementation (`common`, `streaming`, `telemetry`, `state`, `threshold`, `bounds`, `monitor`, `error`). No PyO3 dependency.
-- `crates/hwtest-core/tests/python_compat.rs` + `tests/fixtures/python_golden.json`: byte-for-byte wire compatibility with the original Python implementation. Update the fixtures deliberately if a wire format changes.
-- `hwtest-core/native/src/`: PyO3 bindings only (`conv.rs` = JSON<->Python, enum and error bridging; one file per domain). Built by maturin as `hwtest_core._native` (abi3-py310, `multiple-pymethods`).
-- `hwtest-core/src/hwtest_core/types/*.py`: public modules re-exporting native classes (import paths unchanged). `_native.pyi` holds the type stubs — keep it in sync with the bindings.
-- `hwtest-core/src/hwtest_core/_enums.py`: `DataType`, `ValueQuality`, `BoundType`, `MonitorVerdict` stay Python `Enum`s (mirrored in Rust, converted by value). `errors.py` exceptions are raised from Rust via `import_exception!`.
-- Classes are immutable (frozen pyclasses) except `WithinBaseline`; `to_dict`/`from_dict`/`to_bytes`/`from_bytes` go through one serde schema.
-- Intentional differences from the old Python code are listed in `hwtest-core/README.md` (fail-closed on NaN/inf, unknown `special` kinds rejected, NaN as JSON `null`, exact datetime conversion).
+### Rack configuration
 
-### YAML Specifications (crates/hwtest-spec → `hwtest_core.spec`)
-
-All engineer-facing YAML is parsed and validated in Rust (`serde-saphyr`, YAML 1.2). Errors list **every** problem with `file:line:col: key.path: message` and "did you mean" suggestions; raised in Python as `hwtest_core.errors.SpecError` (a `ValueError`), missing files as `FileNotFoundError`.
-- `testdef.rs`: test definitions (`test_case`, `rack`, `case_parameters`, `monitor_states` — extra keys are state parameters, `state_sequence`, `monitors` with `kwargs`/`kwargs.N` slots and per-state `configuration` bounds incl. `default`, `loggers`, `functional_requirements`). Monitors/loggers accept `kind: bounds|csv|influxdb` or legacy `module:`/`class:` (known legacy classes map to built-ins; others are kept as Python escape-hatch kinds). Logger kwargs `${VAR}`/`${VAR:default}` resolve via `resolved_kwargs()`.
-- `rack.rs` (rack classes, logical channel registry, duplicate-name check), `instance.rs` (per-serial calibration load/save/find), `station.rs` (runner stations). Not yet bound to Python — `hwtest_rack`/`hwtest_runner` still parse these themselves until Phases 3–4.
-- Monitor engine: `hwtest_core::monitor::{StateBounds, BoundsMonitor}`; Python `hwtest_core.spec.Monitor` (re-exported as `hwtest_testcase.Monitor`).
-- `hwtest_testcase.definition`/`monitor` are re-exports of `hwtest_core.spec`. Classes named `Test*` set `__test__ = False` so pytest doesn't collect them.
-- Validate files: `cargo run -p hwtest-spec --example check_spec -- path/to/*.yaml`, or `hwtest_core.spec.check_definitions([...])`.
-- All bindings live in the single `hwtest_core._native` extension: PyO3 classes cannot be shared across separate extension modules.
-
-**Types** (`src/hwtest_core/types/`):
-- `common.py`: Timestamp (nanosecond precision), SourceId, ChannelId, StateId, DataType enum, InstrumentIdentity
-- `telemetry.py`: TelemetryValue, TelemetryMessage (batch with sequence numbers)
-- `state.py`: EnvironmentalState, StateTransition
-- `threshold.py`: Threshold (bounds), StateThresholds (per-state)
-- `monitor.py`: MonitorVerdict, MonitorResult, ThresholdViolation
-- `streaming.py`: StreamField, StreamSchema (CRC32 ID), StreamData (binary protocol)
-- `bounds.py`: YAML bound checks (`within_range`, `within_tolerance`, `within_baseline`, `less_than`, `greater_than`, `good_interval`, `bad_interval`, `good_values`, `bad_values`, `special`), `bound_check_from_dict()`
-
-**Interfaces** (`src/hwtest_core/interfaces/`): Protocol-based definitions for TelemetryPublisher/Subscriber, StatePublisher/Subscriber, Monitor, ThresholdProvider, StreamPublisher/Subscriber, Logger/StreamLogger
-
-### SCPI Library (hwtest-scpi)
-
-- `ScpiConnection`: Command/query interface with automatic error checking (`SYST:ERR?`), typed query methods (`query_number`, `query_bool`, `query_int`, `query_numbers`), and `get_identity()` for `*IDN?` parsing
-- `ScpiTransport` Protocol: `write(str)`, `read() -> str`, `close()` — implemented by `VisaResource` and emulators
-- `VisaResource`: PyVISA-backed transport for real instruments
-- `parse_idn_response()`: Parses `*IDN?` responses into `InstrumentIdentity`
-
-### Instrument Drivers (hwtest-bkprecision)
-
-- `BkDcPsu`: High-level driver for BK Precision 9100 series DC power supplies (9115, 9130B)
-- `BkDcPsuEmulator`: In-process emulator implementing `ScpiTransport` with SCPI command normalization
-- `EmulatorServer`: TCP server wrapping any emulator for external VISA/telnet access
-- `create_instrument(visa_address)`: Factory entry point for test rack dynamic loading
-
-### MCC DAQ HAT Drivers (hwtest-mcc)
-
-Drivers for Measurement Computing DAQ HAT boards (Raspberry Pi / Orange Pi compatible):
-
-- **MCC 118** (`mcc118.py`): 8-channel voltage DAQ (±10V, 100kS/s aggregate)
-  - `Mcc118Instrument`: Continuous scanning with `StreamData` publishing
-  - `Mcc118Channel`, `Mcc118Config`: Channel mapping and configuration
-  - `create_instrument()`: Factory entry point
-
-- **MCC 134** (`mcc134.py`): 4-channel thermocouple DAQ
-  - `Mcc134Instrument`: Polling-based temperature reads with `StreamData` publishing
-  - `ThermocoupleType` enum: TYPE_J, TYPE_K, TYPE_T, TYPE_E, TYPE_R, TYPE_S, TYPE_B, TYPE_N
-  - `Mcc134Channel`, `Mcc134Config`: Channel mapping with thermocouple type selection
-  - `create_instrument()`: Factory entry point
-
-- **MCC 152** (`mcc152.py`): 8 digital I/O + 2 analog outputs (0-5V)
-  - `Mcc152Instrument`: Synchronous control interface (not streaming)
-  - `DioDirection` enum: INPUT, OUTPUT
-  - `dio_read()`, `dio_write()`, `analog_write()`: Channel operations by name or ID
-  - `create_instrument()`: Factory entry point
-
-All MCC drivers implement `get_identity()` returning `InstrumentIdentity` with manufacturer="Measurement Computing".
-
-### Waveshare HAT Drivers (hwtest-waveshare)
-
-Drivers for Waveshare HAT boards (Raspberry Pi 5 compatible via lgpio):
-
-- **High-Precision AD/DA Board** (`high_precision_ad_da.py`): Combined ADC/DAC instrument
-  - `HighPrecisionAdDaInstrument`: Unified driver for ADC reads and DAC writes
-  - `AdcChannel`, `DacChannel`: Channel mapping with aliases
-  - `HighPrecisionAdDaConfig`: Full board configuration
-  - `create_instrument()`: Factory entry point
-
-- **ADS1256** (`ads1256.py`): 8-channel 24-bit ADC (30 kSPS max)
-  - `Ads1256`: Low-level SPI driver
-  - `Ads1256Gain` enum: GAIN_1, GAIN_2, GAIN_4, GAIN_8, GAIN_16, GAIN_32, GAIN_64
-  - `Ads1256DataRate` enum: SPS_2_5 to SPS_30000
-  - Single-ended and differential measurements
-  - `read_voltage()`, `read_differential()`, `read_all_channels()`
-
-- **DAC8532** (`dac8532.py`): 2-channel 16-bit DAC (0-5V output)
-  - `Dac8532`: Low-level SPI driver
-  - `write_voltage()`, `write_raw()`, `write_both()`
-  - Software readback of last written values
-
-- **GPIO Abstraction** (`gpio.py`): Pi 5 compatible GPIO layer
-  - Uses `lgpio` library for RP1 chip compatibility
-  - `Gpio`: Pin management with setup/input/output/close
-
-All Waveshare drivers implement `get_identity()` returning `InstrumentIdentity` with manufacturer="Waveshare".
-
-### Pi 4 Waveshare Simulator (hwtest-sim-pi4-waveshare)
-
-Hardware simulator for integration testing. Runs on Raspberry Pi 4 (recommended) or Pi Zero with Waveshare AD/DA board:
-
-- **CAN Interface** (`can_interface.py`): SocketCAN wrapper with async support
-  - `CanInterface`: Send/receive CAN messages via python-can
-  - `CanMessage`: Message dataclass with arbitration ID, data, extended ID, CAN FD support
-  - `CanConfig`: Interface configuration (interface name, bitrate, FD mode)
-  - Echo mode with configurable ID offset and message filtering
-  - Async receive loop with callbacks
-  - Automatic heartbeat at 10 Hz (configurable) with 8-byte incrementing counter
-
-- **ADS1263 ADC** (`ads1263.py`): 32-bit high-precision ADC driver
-  - `Ads1263`: SPI driver with software-controlled chip select for SPI bus sharing
-  - `Ads1263Config`: Pin mapping, reference voltage, gain, and data rate
-  - `Ads1263Gain` enum: GAIN_1, GAIN_2, GAIN_4, GAIN_8, GAIN_16, GAIN_32
-  - `Ads1263DataRate` enum: SPS_2_5 to SPS_38400
-  - 10 single-ended channels (AIN0-AIN9) plus internal references
-  - `read_voltage()`, `read_differential()`, `read_all_channels()`, `read_raw()`
-  - Uses spidev0.1 with GPIO22 for software CS to coexist with CAN HAT on spidev0.0
-
-- **MCP23017 GPIO Expander** (`mcp23017.py`): 16-bit I2C GPIO driver
-  - `Mcp23017`: I2C driver via smbus2
-  - `Mcp23017Config`: I2C bus and address configuration (0x20-0x27)
-  - `PinDirection` enum: INPUT, OUTPUT
-  - Per-pin direction, pull-up resistor control
-  - Port-level and 16-bit read/write operations
-  - `set_pin_direction()`, `write_pin()`, `read_pin()`, `set_pullup()`
-  - `write_port()`, `read_port()`, `write_all()`, `read_all()`
-
-- **UUT Simulator** (`simulator.py`): Main integration class
-  - `UutSimulator`: Combines CAN, GPIO, DAC, and ADC interfaces
-  - `SimulatorConfig`: Enable/disable individual interfaces
-  - CAN echo mode for loopback testing
-  - DAC voltage output (via hwtest-waveshare)
-  - ADC voltage reading (via hwtest-waveshare or ADS1263)
-  - GPIO digital I/O (via MCP23017)
-
-- **REST API Server** (`server.py`): FastAPI-based remote control
-  - `GET /`: HTML dashboard with interface status
-  - `GET /health`: Health check endpoint
-  - `GET /status`: Full simulator status
-  - `POST /can/send`: Send CAN message
-  - `GET /can/received`: Get received messages
-  - `PUT /can/echo`: Configure echo mode
-  - `GET /can/heartbeat`: Get heartbeat status (running, message count, config)
-  - `POST /dac/write`: Write DAC voltage
-  - `GET /dac/{channel}`: Read DAC channel
-  - `GET /adc/{channel}`: Read ADC channel
-  - `POST /gpio/configure`: Set pin direction
-  - `POST /gpio/write`: Write pin value
-  - `GET /gpio/{pin}`: Read pin value
-
-Run the simulator:
-```bash
-pi4-waveshare-sim --port 8080
-# Or with options:
-pi4-waveshare-sim --can-interface can0 --gpio-address 0x20 --no-adc --debug
-
-# For Pi 4 with Waveshare High-Precision AD/DA board:
-pi4-waveshare-sim --port 8080 --waveshare-adda --no-gpio
+```yaml
+rack: {id: "pi5-mcc-intg-a", description: "..."}
+instruments:
+  dio_controller:
+    driver: "mcc152"                       # built-ins: mcc118 mcc134 mcc152 bk_psu waveshare_adda
+    identity: {manufacturer: "Measurement Computing", model: "MCC 152"}
+    kwargs:
+      address: 0
+      analog_channels: [{id: 0, name: "rack_dac", initial_voltage: 0.0}]
+  scope:
+    driver: "my_drivers.scope:create"      # "module:function" = Python escape-hatch driver
 ```
+
+Legacy `hwtest_<pkg>.<module>:create_instrument` strings for the old Python drivers map to the built-ins.
+
+Logical channel names must be unique across the rack. Calibration factors per rack serial live in `~/.config/hwtest/racks/<class>_<serial>.yaml` or `/etc/hwtest/racks/` (`hwtest-rack init|calibrate`).
+
+### Binary streaming protocol
+
+- Big-endian byte order
+- Schema message (0x01): periodic retransmission every 1 second
+- Data message (0x02): packed samples with implicit timestamps
+- CRC32-based schema ID for change detection
+
+### Deployment
+
+- `deploy/pi5_mcc_intg_a/`: rack server as systemd (`setup.sh native`: binaries from `dist/` or cargo, venv with the wheels) or Docker (Rust builder + libdaqhats built from MCC source). Settings in `/etc/hwtest/rack.env` (`HWTEST_RACK_SERIAL`, `HWTEST_NATS_URL`). Root `Dockerfile` = same image for the Orange Pi 5 rack.
+- `deploy/systemd/hwtest-uut.service`: UUT simulator on the Pi 4 (`/usr/local/bin/hwtest-uut-sim`).
+- `deploy/docker-compose.yml`: dev InfluxDB + Grafana (InfluxDB http://localhost:8086, Grafana http://localhost:3000, admin / hwtest-dev-password, token `hwtest-dev-token`).
+- libdaqhats must be installed on MCC racks (https://github.com/mccdaq/daqhats, `sudo ./install.sh`).
+
+## Hardware Setup
 
 **Raspberry Pi 5 Setup**: The Waveshare HATs require device tree overlays in `/boot/firmware/config.txt`:
 ```
@@ -287,10 +189,10 @@ sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on
 
 Run the UUT simulator with High-Precision AD/DA:
 ```bash
-uut-simulator --port 8080 --can-interface can0 --no-gpio
+hwtest-uut-sim --port 8080 --can-interface can0 --waveshare-adda --no-gpio
 ```
 
-The simulator automatically uses the hwtest-waveshare ADS1256/DAC8532 drivers when available.
+The simulator uses the Rust ADS1256/DAC8532 drivers (`hwtest-instruments::waveshare`).
 
 **MCC DAQ HATs + Waveshare CAN HAT Coexistence (Raspberry Pi 5)**: MCC HATs and Waveshare CAN HATs both use SPI0, but can coexist with hardware modification. This configuration has been tested and verified on Raspberry Pi 5.
 
@@ -346,387 +248,13 @@ Verify MCC HAT detection:
 python3 -c "from daqhats import hat_list, HatIDs; [print(f'Address {h.address}: {HatIDs(h.id).name}') for h in hat_list()]"
 ```
 
-### Test Rack Service (hwtest-rack)
-
-FastAPI-based service for rack orchestration and instrument discovery:
-
-- **Config** (`config.py`): YAML configuration loading
-  - `RackConfig`: Rack ID, description, instrument list
-  - `InstrumentConfig`: Driver path, expected identity, kwargs
-  - `load_config(path)`: Parse YAML into config objects
-
-- **Loader** (`loader.py`): Dynamic driver loading via `importlib`
-  - `load_driver("module:function")`: Import and return factory callable
-
-- **Rack** (`rack.py`): Instrument lifecycle management
-  - `Rack`: Initialize instruments, verify identities, track status
-  - `ManagedInstrument`: State tracking (pending/initializing/ready/error/closed)
-
-- **Server** (`server.py`): REST API endpoints
-  - `GET /`: HTML dashboard with instrument status
-  - `GET /health`: Health check (returns rack state)
-  - `GET /status`: Full rack status JSON
-  - `GET /instruments`: List all instruments
-  - `GET /instruments/{name}`: Get specific instrument details
-
-- **Models** (`models.py`): Pydantic response models
-  - `InstrumentStatus`, `RackStatus`, `HealthResponse`, `IdentityModel`
-
-### Telemetry Loggers (hwtest-logger)
-
-Loggers for persisting streaming telemetry data to storage backends:
-
-- **CsvStreamLogger** (`csv_logger.py`): CSV file logger
-  - `CsvStreamLoggerConfig`: Output directory, buffer size, tag-based organization
-  - `register_schema()`: Register schema for a topic before logging
-  - `log()`: Write streaming data batches to CSV
-  - Creates one CSV file per topic with `timestamp_ns` + field columns
-  - Writes `metadata.json` with tags and schema information
-  - Directory structure: `{output_dir}/{test_type}/{test_case_id}/{test_run_id}/`
-
-- **InfluxDbStreamLogger** (`influxdb_logger.py`): InfluxDB time-series logger
-  - `InfluxDbStreamLoggerConfig`: URL, org, bucket, token, batch settings
-  - `register_schema()`: Register schema for a topic before logging
-  - `log()`: Write streaming data as InfluxDB points with tags
-  - `health_check()`: Verify InfluxDB connection health
-  - Point structure: measurement=telemetry, tags from config, fields from schema
-  - Requires `influxdb-client`: `pip install hwtest-logger[influxdb]`
-
-Both loggers implement the `StreamLogger` protocol from `hwtest_core.interfaces`:
-```python
-async def start(tags: dict[str, str]) -> None
-async def stop() -> None
-def register_schema(topic: str, schema: StreamSchema) -> None
-async def log(topic: str, data: StreamData) -> None
-```
-
-### Test Results Database (hwtest-db)
-
-SQLite-based persistence for test results, using the schema in `sql/test_results_schema.sql`:
-
-- **Models** (`models.py`): Dataclasses for database entities
-  - `UnitType`, `DesignRevision`, `Unit`: Product tracking
-  - `TestCase`, `EnvironmentalState`, `Requirement`: Test definitions
-  - `TestRun`, `TestRunUnit`: Test execution
-  - `SystemFailure`, `UnitFailure`: Failure recording
-  - `RunType`, `RunStatus`, `TestOutcome`: Enums
-
-- **Repositories** (`repositories.py`): Async database operations
-  - `UnitRepository`: CRUD for unit types, revisions, units
-  - `TestCaseRepository`: CRUD for test cases, states, requirements
-  - `TestRunRepository`: Test runs, failures, outcomes
-
-- **Connection** (`connection.py`): Database management
-  - `Database`: Async context manager with optional schema creation
-  - `create_database()`, `open_database()`: Low-level functions
-
-Usage:
-```python
-from hwtest_db import Database, UnitRepository, UnitType
-
-async with Database("test_results.db", create=True) as db:
-    repo = UnitRepository(db)
-    unit_type_id = await repo.create_unit_type(
-        UnitType(id=None, name="Widget", description="Test widget")
-    )
-```
-
-### NATS Streaming (hwtest-nats)
-
-NATS/JetStream integration for telemetry streaming. Implements the `StreamPublisher` and `StreamSubscriber` protocols from hwtest-core.
-
-- **Config** (`config.py`): Connection and stream configuration
-  - `NatsConfig`: Server URLs, stream name, subject prefix, authentication
-  - `get_subject()`, `get_schema_subject()`, `get_data_subject()`: Subject generation
-
-- **Connection** (`connection.py`): NATS connection lifecycle
-  - `NatsConnection`: Manages connection, JetStream context, auto-reconnect
-  - `ensure_stream()`: Creates JetStream stream if not exists
-  - Async context manager support
-
-- **Publisher** (`publisher.py`): Stream data publisher
-  - `NatsStreamPublisher`: Publishes data and broadcasts schema every 1 second
-  - Implements `StreamPublisher` protocol
-  - Supports shared or owned connection
-
-- **Subscriber** (`subscriber.py`): Stream data subscriber
-  - `NatsStreamSubscriber`: Receives schema and data messages
-  - `subscribe(source_id)`: Subscribe to a source's data stream
-  - `get_schema()`: Wait for and return schema
-  - `data()`: Async iterator over received data
-
-- **State Management** (`state.py`): Environmental state pub/sub
-  - `NatsStatePublisher`: Publishes state transitions
-  - `NatsStateSubscriber`: Receives state changes
-  - `register_state()`, `get_current_state()`, `transitions()`
-
-- **Monitor** (`monitor.py`): Telemetry threshold monitoring
-  - `TelemetryMonitor`: Evaluates data against state-dependent thresholds
-  - Skips evaluation during state transitions
-  - Publishes monitor results to NATS
-  - Supports violation callbacks
-
-Usage:
-```python
-from hwtest_nats import NatsConfig, NatsStreamPublisher, NatsStreamSubscriber
-from hwtest_core.types.streaming import StreamSchema, StreamField, StreamData
-from hwtest_core.types.common import DataType
-
-# Publisher
-config = NatsConfig.from_url("nats://localhost:4222")
-schema = StreamSchema(source_id="sensor", fields=(StreamField("voltage", DataType.F64, "V"),))
-
-async with NatsStreamPublisher(config, schema) as publisher:
-    data = StreamData(schema_id=schema.schema_id, timestamp_ns=..., period_ns=1_000_000, samples=((3.3,),))
-    await publisher.publish(data)
-
-# Subscriber
-async with NatsStreamSubscriber(config) as subscriber:
-    await subscriber.subscribe("sensor")
-    schema = await subscriber.get_schema(timeout=5.0)
-    async for data in subscriber.data():
-        process(data)
-```
-
-### Test Case Framework (hwtest-testcase)
-
-Framework for creating and executing HASS/HALT test cases:
-
-- **Context** (`context.py`): Test execution context
-  - `TestContext`: Shared state, artifacts, resources across test execution
-  - `set_state()`, `add_artifact()`, `set_resource()`/`get_resource()`
-
-- **Phase** (`phase.py`): Test phase definitions
-  - `TestPhase`: Defines a discrete period with an environmental state
-  - `PhaseResult`, `PhaseStatus`: Phase execution outcomes
-  - Supports pre/main/post actions and skip conditions
-
-- **TestCase** (`testcase.py`): Base class for test implementations
-  - `TestCase`: Abstract base with setup/execute/teardown lifecycle
-  - `TestCaseResult`, `TestStatus`: Test execution outcomes
-  - `run_phase()`: Execute phases with abort support
-
-- **Runner** (`runner.py`): Test execution orchestration
-  - `TestRunner`: Runs multiple test cases
-  - `RunnerConfig`: Sequential/concurrent execution, stop-on-failure, timeouts
-  - `RunnerResult`: Aggregated statistics
-
-Usage:
-```python
-from hwtest_testcase import TestCase, TestPhase, TestRunner, RunnerConfig
-
-class VoltageTest(TestCase):
-    name = "Voltage Stress Test"
-
-    async def setup(self) -> None:
-        self.context.set_resource("psu", await get_psu())
-
-    async def execute(self) -> None:
-        await self.run_phase(TestPhase(name="ambient", state=ambient_state))
-        await self.run_phase(TestPhase(name="stress", state=stress_state))
-
-    async def teardown(self) -> None:
-        psu = self.context.get_resource("psu")
-        await psu.set_output(False)
-
-# Run tests
-runner = TestRunner(config=RunnerConfig(stop_on_failure=True))
-runner.add_test(VoltageTest("test_001"))
-result = await runner.run_all()
-print(f"Passed: {result.passed}/{result.total}")
-```
-
-### Docker Compose (deploy/)
-
-Development services for InfluxDB and Grafana:
-
-```bash
-cd deploy
-docker compose up -d
-
-# Access:
-# - InfluxDB UI: http://localhost:8086 (admin / hwtest-dev-password)
-# - Grafana: http://localhost:3000 (admin / hwtest-dev-password)
-# - InfluxDB token: hwtest-dev-token
-
-# Configure hwtest-logger:
-export INFLUXDB_TOKEN=hwtest-dev-token
-```
-
-### Integration Tests (hwtest-intg)
-
-Integration test package containing tests and reusable fixtures for hardware validation:
-
-- **CAN Interface** (`can/interface.py`): Test rack CAN operations
-  - `RackCanInterface`: Wraps python-can for test rack CAN bus access
-  - `RackCanConfig`: Interface configuration (interface name, bitrate)
-  - `wait_for_heartbeat()`: Wait for UUT heartbeat messages
-  - `echo_test()`: Send message and verify echo response
-  - `collect_messages()`: Collect messages for a duration
-
-- **UUT Client** (`clients/uut_client.py`): Async HTTP client for UUT REST API
-  - `UutClient`: httpx-based client for UUT simulator
-  - `health()`, `status()`: Health and status endpoints
-  - `can_send()`, `can_set_echo()`, `can_get_heartbeat()`: CAN control
-  - `dac_write()`, `dac_read()`: DAC operations
-  - `adc_read()`: ADC operations
-  - `gpio_configure()`, `gpio_write()`, `gpio_read()`: GPIO operations
-
-- **Config Utilities** (`utils/config.py`): Package resource loading
-  - `load_rack_config(name)`: Load YAML configs from package resources
-  - `get_config_path(name)`: Get filesystem path to config file
-
-- **Pytest Fixtures** (`fixtures/conftest.py`): Reusable test fixtures
-  - `rack_can`: Opened CAN interface fixture
-  - `uut_client`: Async HTTP client fixture
-  - `uut_url`: UUT URL from `UUT_URL` environment variable
-  - `can_interface_name`: CAN interface from `CAN_INTERFACE` env var
-
-- **CAN Message ID Constants**:
-  - `UUT_HEARTBEAT_ID = 0x100`: UUT heartbeat message ID
-  - `RACK_TEST_MSG_ID = 0x200`: Rack test message ID
-  - `ECHO_ID_OFFSET = 0x10`: Offset for echoed messages
-
-Run integration tests:
-```bash
-cd hwtest-intg
-UUT_URL=http://192.168.68.xxx:8080 pytest tests/integration/ -v -m integration
-```
-
-The UUT simulator now automatically sends heartbeat messages at 10 Hz when CAN is enabled. The heartbeat contains an 8-byte incrementing counter.
-
-### Test Runner Service (hwtest-runner)
-
-Web-based test execution service. Operators select a test case, choose a mode (functional/HASS/HALT), and monitor execution in real time from a browser. Only one test runs at a time.
-
-- **Config** (`config.py`): Station configuration loading
-  - `StationConfig`: Station ID, description, rack reference, UUT config, test case list
-  - `RackReference`: Rack class YAML name + optional instance serial for calibration
-  - `UutConfig`: UUT simulator URL
-  - `TestCaseEntry`: Test case ID, name, definition YAML name, available modes
-  - `load_station_config(path)`: Parse station YAML into config objects
-
-- **Models** (`models.py`): Pydantic request/response models
-  - `RunState` enum: IDLE, RUNNING, STOPPING
-  - `RunRequest`: test_case_id + mode
-  - `RunStatus`: state, test_case_id, mode, current_state, cycle, stats, message
-  - `StationStatus`: station info + rack state + run status + test case list
-  - `TestCaseModel`: test case info for API responses
-
-- **Executor** (`executor.py`): Test execution engine
-  - `TestExecutor`: Runs test cases in background asyncio tasks
-  - Single-run lock (only one test at a time)
-  - Cooperative cancellation via `stop()`
-  - `RunStatistics`: Tracks passes, failures, cycles, errors
-  - Voltage echo cycle logic (write DAC, read ADC, echo, read back)
-  - Loads test definitions and monitors from YAML via hwtest-testcase
-  - Uses Rack abstraction for instrument access, httpx for UUT HTTP calls
-
-- **Server** (`server.py`): FastAPI web service
-  - `GET /`: HTML dashboard with test picker, mode selector, live status (1s polling)
-  - `GET /health`: Health check
-  - `GET /status`: Full station status JSON
-  - `GET /test-cases`: List available test cases
-  - `POST /run`: Start a test (RunRequest body)
-  - `POST /stop`: Stop current test
-  - `GET /run/status`: Current run status
-  - CLI entry point: `hwtest-runner <config.yaml> --host --port --log-level`
-
-Station configuration format (`configs/pi5_bench_a_station.yaml`):
-```yaml
-station:
-  id: "pi5-bench-a"
-  description: "Pi 5 integration bench A"
-
-rack:
-  config: "pi5_mcc_intg_a_rack"    # rack class YAML name (searched)
-  serial: "001"                     # rack instance serial (for calibration)
-
-uut:
-  url: "http://192.168.68.4:8080"   # UUT simulator URL
-
-test_cases:
-  - id: "voltage_echo_monitor"
-    name: "Voltage Echo Monitor"
-    definition: "voltage_echo_monitor"   # test definition YAML name (searched)
-    modes: [functional, hass, halt]
-```
-
-Run the runner:
-```bash
-hwtest-runner configs/pi5_bench_a_station.yaml --port 8000
-# Visit http://localhost:8000 for the dashboard
-```
-
-### Key Design Patterns
-
-- **Protocol-based interfaces**: Uses `typing.Protocol` for decoupled implementations
-- **Immutable data types**: Frozen dataclasses with `to_dict`/`from_dict` serialization
-- **State-dependent thresholds**: Measurement norms vary by environmental state
-- **Transition states**: Evaluation suspended during state changes to avoid false failures
-- **Channel aliasing**: Logical names (e.g., "dut_power") decouple tests from physical hardware
-- **Instrument identity verification**: Rack confirms manufacturer/model at startup via `get_identity()` (SCPI instruments use `*IDN?`, MCC HATs use daqhats serial API)
-- **Factory entry points**: Each instrument driver exposes a `create_instrument()` function for dynamic loading by the test rack and programmatic use in tests
-- **SCPI command normalization**: Emulators accept any valid SCPI form (long/short, optional segments) by normalizing to canonical short-form keys
-
-### Rack Configuration Format
-
-Example YAML config (`configs/orange_pi_5_rack.yaml`):
-
-```yaml
-rack:
-  id: "orange-pi-5-integration"
-  description: "Orange Pi 5 integration test rack"
-
-instruments:
-  dio_controller:
-    driver: "hwtest_mcc.mcc152:create_instrument"
-    identity:
-      manufacturer: "Measurement Computing"
-      model: "MCC 152"
-    kwargs:
-      address: 0
-      source_id: "dio_controller"
-      dio_channels:
-        - {id: 0, name: "relay_power", direction: "OUTPUT"}
-      analog_channels:
-        - {id: 0, name: "control_voltage", initial_voltage: 0.0}
-
-  voltage_daq:
-    driver: "hwtest_mcc.mcc118:create_instrument"
-    identity:
-      manufacturer: "Measurement Computing"
-      model: "MCC 118"
-    kwargs:
-      address: 1
-      sample_rate: 1000.0
-      source_id: "voltage_daq"
-      channels:
-        - {id: 0, name: "dut_voltage"}
-```
-
-Run the rack server:
-```bash
-hwtest-rack configs/orange_pi_5_rack.yaml --port 8000
-# Or: python -m hwtest_rack.server configs/orange_pi_5_rack.yaml
-```
-
-### Binary Streaming Protocol
-
-- Big-endian byte order
-- Schema message (0x01): Periodic retransmission every 1 second
-- Data message (0x02): Packed samples with implicit timestamps
-- CRC32-based schema ID for change detection
 
 ## Code Standards
 
-- PEP 8 with 100 character line length
-- Full type hints required (`mypy --strict`)
-- Google-style docstrings for public APIs
-- Tests mirror source structure in `tests/unit/`
-- Minimal external dependencies (core library has no Python runtime deps)
-- Rust: `cargo fmt`, `cargo clippy` (pedantic) clean, no `unsafe`, doc comments on public items
-- Deployment: Docker images build the `hwtest-core` wheel in a `rust:` builder stage; bare-metal installs (Pis) need rustup to `pip install ./hwtest-core`
+- Rust: `cargo fmt`, `cargo clippy` (pedantic) clean, doc comments on public items, `unsafe` only in `daqhats/ffi.rs` with `// SAFETY:` comments
+- Python: PEP 8 / black at 100 columns, `mypy --strict`, pylint clean, Google-style docstrings
+- Bindings are conversion glue only; the crates are the single source of truth for formats and evaluation
+- Wire formats are a contract: change `crates/hwtest-core/tests/fixtures/` deliberately
 
 ## Testing Philosophy
 
@@ -750,117 +278,13 @@ This project prioritizes **real hardware testing** and **behavioral simulators**
 - Isolating a specific component during initial development
 - Testing timeout and retry logic
 
-### Code Coverage with Mock Detection
 
-The project includes tooling to track which code is covered only by mocked tests, helping identify candidates for better test coverage.
+### Simulators and emulators
 
-**Run coverage analysis:**
-```bash
-# Full coverage across all packages
-python scripts/run_coverage.py
+Prefer behavioural emulators to mocks. Available without hardware:
+- `HWTEST_EMULATE=1` / `--emulate`: every rack driver (MCC HATs, Waveshare board at SPI level, BK PSU over SCPI, MCP23017); `Rack.emu_*` hooks set inputs and wire outputs to inputs
+- `hwtest-uut-sim --emulate` or `hwtest.UutSimulator(can_interface="virtual:x")` in-process; `CanBus("virtual:x")` shares the bus
+- `hwtest-bk-emulator`: BK PSU over TCP for VISA-style tools
+- Real services: NATS (`docker run -p 4222:4222 nats -js`, then `HWTEST_NATS_URL=nats://localhost:4222 cargo test -p hwtest-nats`), InfluxDB via `deploy/docker-compose.yml`
 
-# Specific package(s)
-python scripts/run_coverage.py -p hwtest-core -p hwtest-sim-pi4-waveshare
-
-# With mock analysis report
-python scripts/run_coverage.py --analyze-mocks
-
-# Open HTML report in browser
-python scripts/run_coverage.py --open
-```
-
-**Coverage reports generated:**
-- `coverage/html/index.html` - Interactive line-by-line coverage report with context showing which tests covered each line
-- `coverage/mock_analysis.html` - Report highlighting lines covered only by mocked tests
-- `coverage/coverage.json` - JSON data for programmatic analysis
-
-**Mock detection:**
-The test framework automatically detects tests that use mocking by analyzing:
-- Imports from `unittest.mock` (MagicMock, patch, Mock, etc.)
-- Use of pytest-mock's `mocker` fixture
-- Function parameters containing "mock" in the name
-- Test function names containing "mock", "fake", or "stub"
-
-Tests using mocks are automatically marked with `@pytest.mark.uses_mock`.
-
-**Interpreting the mock analysis:**
-```
-Files with significant mock-only coverage (candidates for integration tests):
-  simulator.py: 89 lines mock-only (203/323 covered)
-  mcp23017.py: 47 lines mock-only (161/193 covered)
-```
-
-These files have code paths exercised only through mocked tests. Consider:
-- Adding integration tests with real hardware
-- Building a behavioral simulator (like `BkDcPsuEmulator`)
-- Using the UUT simulator for end-to-end testing
-
-### Test Organization
-
-```
-hwtest-<package>/
-├── src/
-│   └── hwtest_<package>/
-│       └── module.py
-└── tests/
-    ├── unit/           # Fast tests, no hardware required
-    │   └── test_module.py
-    └── integration/    # Requires hardware or simulators
-        └── test_module_integration.py
-```
-
-**Unit tests** (`tests/unit/`):
-- Run without hardware: `pytest tests/unit/`
-- Should complete in seconds
-- Use simulators or minimal mocking when hardware interfaces are unavoidable
-
-**Integration tests** (`tests/integration/`):
-- Require hardware or external services
-- Marked with `@pytest.mark.integration`
-- Run with: `pytest tests/integration/ -m integration`
-- Set environment variables for hardware addresses (e.g., `UUT_URL`)
-
-### Building Simulators
-
-When hardware isn't available, build behavioral simulators rather than using mocks. Examples in this codebase:
-
-**SCPI Instrument Emulator** (`hwtest-bkprecision/emulator.py`):
-```python
-class BkDcPsuEmulator:
-    """In-process emulator implementing ScpiTransport protocol."""
-
-    def __init__(self) -> None:
-        self._voltage = 0.0
-        self._current = 0.0
-        self._output_on = False
-
-    def write(self, command: str) -> None:
-        # Parse and execute SCPI commands, updating internal state
-        ...
-
-    def read(self) -> str:
-        # Return queued responses from previous queries
-        ...
-```
-
-**Pi 4 Waveshare Simulator** (`hwtest-sim-pi4-waveshare/simulator.py`):
-- Full REST API simulating a Unit Under Test
-- Supports ADC/DAC/GPIO/CAN interfaces
-- Can inject failures for stress testing
-- Runs as a standalone service on a Raspberry Pi
-
-**Benefits of simulators over mocks:**
-- Reusable across many tests
-- Can be run as external services for manual testing
-- Capture real protocol behavior (timing, state machines, error conditions)
-- Tests remain valid when implementation details change
-
-### Coverage Targets
-
-The project aims for meaningful coverage, not arbitrary percentages:
-
-- **Core types and interfaces**: High coverage through unit tests (these have no hardware dependencies)
-- **Instrument drivers**: Coverage through integration tests with real hardware or simulators
-- **Protocol implementations**: Coverage through behavioral tests, not mock verification
-
-Focus on reducing "mock-only coverage" rather than increasing raw coverage numbers. A line covered by an integration test is worth more than the same line covered only by a mocked unit test.
+Coverage of the Python layer: `python scripts/run_coverage.py [--analyze-mocks]`.

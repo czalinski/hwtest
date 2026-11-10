@@ -1,18 +1,16 @@
 """Core library for hardware test automation.
 
-This package provides foundational data types, interfaces, and error types
-for the hwtest hardware test automation framework. The data types and wire
-protocols are implemented in Rust (``crates/hwtest-core``) and exposed through
-the ``hwtest_core._native`` extension; interfaces (``typing.Protocol``),
-enums and exceptions are plain Python. It has no Python runtime dependencies.
+This package provides the foundational data types and error types for the
+hwtest hardware test automation framework. Everything is implemented in Rust
+(``crates/``) and exposed through the ``hwtest_core._native`` extension; only
+enums and exceptions are plain Python. Test scripts use the ``hwtest``
+package on top of this. It has no Python runtime dependencies.
 
 Key components:
     - Types: Common types (Timestamp, SourceId, ChannelId), telemetry types
       (TelemetryValue, TelemetryMessage), streaming protocol types (StreamSchema,
       StreamData), environmental state types, threshold definitions, and monitor
       result types.
-    - Interfaces: Protocol-based definitions for telemetry pub/sub, state
-      management, streaming data pub/sub, monitors, and loggers.
     - Errors: Hierarchy of exception types for various failure modes.
 
 Example:
@@ -31,16 +29,6 @@ from hwtest_core.errors import (
     StateError,
     TelemetryConnectionError,
     ThresholdError,
-)
-from hwtest_core.interfaces import (
-    Monitor,
-    StatePublisher,
-    StateSubscriber,
-    StreamPublisher,
-    StreamSubscriber,
-    TelemetryPublisher,
-    TelemetrySubscriber,
-    ThresholdProvider,
 )
 from hwtest_core.types import (
     BadInterval,
@@ -125,18 +113,6 @@ __all__ = [
     "MonitorResult",
     "MonitorVerdict",
     "ThresholdViolation",
-    # Streaming interfaces
-    "StreamPublisher",
-    "StreamSubscriber",
-    # Telemetry interfaces
-    "TelemetryPublisher",
-    "TelemetrySubscriber",
-    # State interfaces
-    "StatePublisher",
-    "StateSubscriber",
-    # Monitor interfaces
-    "Monitor",
-    "ThresholdProvider",
     # Errors
     "HwtestError",
     "SchemaError",

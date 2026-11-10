@@ -40,7 +40,7 @@ enum Command {
         /// Rack class YAML.
         config: PathBuf,
         /// Rack instance serial (loads calibration).
-        #[arg(long)]
+        #[arg(long, env = "HWTEST_RACK_SERIAL")]
         serial: Option<String>,
         #[arg(long, default_value = "0.0.0.0")]
         host: String,

@@ -12,6 +12,7 @@ use crate::{server, AdDaBackend, GpioBackend, SimConfig, Simulator};
 use clap::Parser;
 
 #[derive(Parser)]
+// Command-line flags (--no-can, --emulate, ...) are naturally independent bools.
 #[allow(clippy::struct_excessive_bools)]
 #[command(about = "UUT simulator (CAN, ADC/DAC, GPIO, fault injection)", version)]
 struct Args {

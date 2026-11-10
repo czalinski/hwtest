@@ -27,11 +27,14 @@ Access:
 
 ### Prerequisites
 
-1. Install hwtest-uut package:
+1. Install the simulator binary (Rust, no Python needed):
 ```bash
-pip install --user /path/to/hwtest-uut
-# Or from the repo:
-pip install --user -e /home/pi/hwtest/hwtest-uut
+# On the dev machine
+scripts/build_release.sh --target aarch64
+scp dist/aarch64/hwtest-uut-sim pi@<uut>:/tmp/
+# On the Pi
+sudo install -m 0755 /tmp/hwtest-uut-sim /usr/local/bin/
+hwtest-uut-sim --help
 ```
 
 2. Configure CAN interface in `/boot/firmware/config.txt`:

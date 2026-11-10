@@ -995,7 +995,8 @@ monitors:
             format!("test_case: {{id: t}}\nmonitor_states: {{a: {{}}}}\nloggers:\n  l: {{kind: csv, kwargs: {{output_dir: x}}, enabled: {enabled}}}\n")
         };
         let on = |enabled: &str| {
-            TestDefinition::from_yaml_str(&doc(enabled), None).unwrap().enabled_loggers(false).len() == 1
+            TestDefinition::from_yaml_str(&doc(enabled), None).unwrap().enabled_loggers(false).len()
+                == 1
         };
         assert!(on("true") && !on("false") && on("\"yes\""));
         assert!(!on("\"${HWTEST_SPEC_TEST_UNSET_FLAG:false}\""));

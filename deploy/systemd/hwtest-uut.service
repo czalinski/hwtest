@@ -8,13 +8,16 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/home/pi
-Environment="PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
-# UUT simulator with cyclic failure injection:
+# Rust UUT simulator. Install it with:
+#   scripts/build_release.sh --target aarch64        (on the dev machine)
+#   sudo install -m 0755 dist/aarch64/hwtest-uut-sim /usr/local/bin/
+#
+# Cyclic failure injection:
 # - failure-delay: 300s (5 minutes) before failure activates
 # - failure-duration: 10s failure stays active before recovery
 # - failure-offset: +1.0V added to DAC output during failure
-ExecStart=/home/pi/.local/bin/uut-simulator \
+ExecStart=/usr/local/bin/hwtest-uut-sim \
     --port 8080 \
     --can-interface can0 \
     --waveshare-adda \

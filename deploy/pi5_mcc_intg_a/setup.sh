@@ -64,39 +64,56 @@ install_native() {
     mkdir -p "$INSTALL_DIR/configs"
     mkdir -p "$INSTALL_DIR/logs"
 
-    # Create virtual environment
-    log_info "Creating Python virtual environment..."
-    python3 -m venv "$INSTALL_DIR/venv"
-
-    # hwtest-core is a Rust extension; building it needs a Rust toolchain
-    # (rustup installs per user, so look in the invoking user's ~/.cargo too).
-    CARGO_BIN="$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)/.cargo/bin"
+    # Rust binaries: use a release build from scripts/build_release.sh if present,
+    # otherwise build here (as the invoking user, so target/ isn't root-owned).
+    BUILD_USER="${SUDO_USER:-root}"
+    CARGO_BIN="$(getent passwd "$BUILD_USER" | cut -d: -f6)/.cargo/bin"
     if [[ -x "$CARGO_BIN/cargo" ]]; then
         export PATH="$CARGO_BIN:$PATH"
     fi
-    if ! command -v cargo >/dev/null 2>&1; then
-        log_error "Rust toolchain not found (needed to build hwtest-core). Install it with:"
-        log_error "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-        exit 1
+    ARCH="$(uname -m)"
+    BIN_SRC="$REPO_ROOT/dist/$ARCH"
+    if [[ ! -x "$BIN_SRC/hwtest-rack" ]]; then
+        if ! command -v cargo >/dev/null 2>&1; then
+            log_error "No prebuilt binaries in $BIN_SRC and no Rust toolchain. Either run"
+            log_error "  scripts/build_release.sh --target $ARCH   (on the dev machine, then copy dist/)"
+            log_error "or install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            exit 1
+        fi
+        log_info "Building Rust binaries (this takes a while on a Pi)..."
+        sudo -u "$BUILD_USER" env PATH="$PATH" cargo build --release --locked \
+            --manifest-path "$REPO_ROOT/Cargo.toml" \
+            -p hwtest-rack -p hwtest-runner -p hwtest-instruments --bins
+        BIN_SRC="$REPO_ROOT/target/release"
+    fi
+    log_info "Installing binaries to $INSTALL_DIR/bin..."
+    mkdir -p "$INSTALL_DIR/bin"
+    for b in hwtest-rack hwtest-runner hwtest-hat-scan; do
+        [[ -x "$BIN_SRC/$b" ]] && install -m 0755 "$BIN_SRC/$b" "$INSTALL_DIR/bin/"
+    done
+
+    # The rack server loads MCC's C library at runtime.
+    if ! ldconfig -p | grep -q libdaqhats; then
+        log_warn "libdaqhats not found. Install it from https://github.com/mccdaq/daqhats:"
+        log_warn "  git clone https://github.com/mccdaq/daqhats && cd daqhats && sudo ./install.sh"
     fi
 
-    # Install packages
-    log_info "Installing hwtest packages..."
+    # Python environment for test scripts (hwtest-core wheel + hwtest SDK).
+    log_info "Creating Python virtual environment for test scripts..."
+    python3 -m venv "$INSTALL_DIR/venv"
     "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
-    "$INSTALL_DIR/venv/bin/pip" install \
-        "$REPO_ROOT/hwtest-core" \
-        "$REPO_ROOT/hwtest-mcc" \
-        "$REPO_ROOT/hwtest-rack"
-
-    # Install daqhats if not already installed system-wide
-    if ! "$INSTALL_DIR/venv/bin/python" -c "import daqhats" 2>/dev/null; then
-        log_info "Installing daqhats library..."
-        "$INSTALL_DIR/venv/bin/pip" install daqhats
+    WHEEL="$(ls "$REPO_ROOT"/dist/hwtest_core-*"$ARCH"*.whl 2>/dev/null | head -1 || true)"
+    if [[ -z "$WHEEL" ]]; then
+        command -v cargo >/dev/null 2>&1 || { log_error "no hwtest_core wheel in dist/ and no Rust toolchain"; exit 1; }
+        WHEEL="$REPO_ROOT/hwtest-core"
     fi
+    "$INSTALL_DIR/venv/bin/pip" install "$WHEEL" "$REPO_ROOT/hwtest-sdk"
 
     # Copy configuration
     log_info "Copying rack configuration..."
     cp "$REPO_ROOT/configs/pi5_mcc_intg_a_rack.yaml" "$INSTALL_DIR/configs/"
+    mkdir -p /etc/hwtest/racks
+    log_info "Rack calibration files go in /etc/hwtest/racks (hwtest-rack init / calibrate)."
 
     # Set ownership
     chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"

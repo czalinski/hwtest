@@ -622,6 +622,8 @@ impl Session {
     ///
     /// # Errors
     /// [`RunError::Measurement`] outside a state or when the fields change.
+    // One linear pass: validate, evaluate, record, log, publish; splitting it
+    // would only move the borrow juggling of `self` into helpers.
     #[allow(clippy::too_many_lines)]
     pub fn measure(
         &mut self,

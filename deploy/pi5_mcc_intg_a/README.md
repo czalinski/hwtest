@@ -19,8 +19,14 @@ Deployment files for the Raspberry Pi 5 MCC DAQ integration test rack.
 git clone https://github.com/czalinski/hwtest.git
 cd hwtest/deploy/pi5_mcc_intg_a
 
-# Install as systemd service
+# Install as systemd service. Uses binaries/wheels from dist/ if present
+# (scripts/build_release.sh on the dev machine, then copy dist/ over);
+# otherwise builds with cargo on the Pi (needs rustup, slow).
+# Also needs MCC's libdaqhats: https://github.com/mccdaq/daqhats (sudo ./install.sh)
 sudo ./setup.sh native
+
+# Optional: calibration serial / NATS
+echo "HWTEST_RACK_SERIAL=001" | sudo tee /etc/hwtest/rack.env
 
 # Check status
 sudo systemctl status hwtest-rack
@@ -60,7 +66,11 @@ API endpoints:
 - `/status` - Full rack status (JSON)
 - `/instruments` - List instruments (JSON)
 - `/instruments/{name}` - Instrument details (JSON)
-- `/docs` - OpenAPI documentation
+- `/channels` - Logical channels (JSON)
+- `/channels/{name}` - Current value of a channel (JSON)
+
+Test scripts run from the venv that setup installs:
+`/opt/hwtest/venv/bin/python script.py` (see `hwtest-intg/`).
 
 ## Management Commands
 

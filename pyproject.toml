@@ -11,17 +11,8 @@ dynamic_context = "test_function"
 # Source packages to measure
 source = [
     "hwtest-core/src",
-    "hwtest-scpi/src",
-    "hwtest-bkprecision/src",
-    "hwtest-mcc/src",
-    "hwtest-waveshare/src",
-    "hwtest-sim-pi4-waveshare/src",
-    "hwtest-rack/src",
-    "hwtest-logger/src",
-    "hwtest-db/src",
-    "hwtest-nats/src",
-    "hwtest-testcase/src",
-    "hwtest-intg/src",
+    "hwtest-sdk/src",
+    "hwtest-intg/scripts",
 ]
 
 # Files to omit from coverage

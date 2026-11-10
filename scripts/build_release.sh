@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build release artifacts for the dev machine (x86_64) and the Pis / Orange Pi (aarch64).
 #
-# Output: dist/*.whl            abi3 wheels (one per architecture serves Python >= 3.10)
-#         dist/<arch>/hwtest-*   service binaries (rack server, runner, simulators, tools)
+# Output: dist/hwtest_core-*.whl   abi3 wheels (one per architecture serves Python >= 3.10)
+#         dist/hwtest-*.whl        the hwtest SDK for test scripts (pure Python)
+#         dist/<arch>/hwtest-*     service binaries (rack server, runner, UUT simulator, tools)
 #
 # Cross-compilation uses maturin's zig linker, so no aarch64 sysroot is needed.
 # Prerequisites (one time):
@@ -11,8 +12,9 @@
 #   cargo install cargo-zigbuild
 #
 # Install on a Pi:
-#   scp dist/hwtest_core-*aarch64*.whl hwtest@<pi>:/tmp/
-#   ssh hwtest@<pi> 'source ~/.venv/bin/activate && pip install --force-reinstall /tmp/hwtest_core-*aarch64*.whl'
+#   scp dist/hwtest_core-*aarch64*.whl dist/hwtest-*.whl dist/aarch64/* hwtest@<pi>:/tmp/
+#   ssh hwtest@<pi> 'source ~/.venv/bin/activate && pip install --force-reinstall /tmp/*.whl'
+#   (or copy dist/ into the repo on the Pi and run deploy/pi5_mcc_intg_a/setup.sh native)
 #
 # Usage: scripts/build_release.sh [--target aarch64|x86_64|all]   (default: all)
 set -euo pipefail
@@ -21,7 +23,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${2:-all}"
 [[ "${1:-}" == "--target" ]] || TARGET="all"
 
-# Python packages backed by Rust (add hwtest-<pkg> here as packages are ported).
+# Python package backed by Rust (the single PyO3 extension).
 NATIVE_PACKAGES=(hwtest-core)
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -48,6 +50,10 @@ for pkg in "${NATIVE_PACKAGES[@]}"; do
         build "$pkg" --target aarch64-unknown-linux-gnu --zig --compatibility manylinux2014
     fi
 done
+
+# The SDK is pure Python: one wheel for every architecture.
+python3 -m pip wheel --quiet --no-deps --no-build-isolation -w "$REPO_ROOT/dist" "$REPO_ROOT/hwtest-sdk" \
+    || python3 -m pip wheel --quiet --no-deps -w "$REPO_ROOT/dist" "$REPO_ROOT/hwtest-sdk"
 
 # Rust service binaries (every [[bin]] in the workspace crates).
 command -v cargo-zigbuild >/dev/null || die "cargo-zigbuild not found (cargo install cargo-zigbuild)"

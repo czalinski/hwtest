@@ -1024,6 +1024,7 @@ pub struct PyUutSimulator {
 impl PyUutSimulator {
     #[new]
     #[pyo3(signature = (*, port = 0, host = "127.0.0.1", can_interface = None, loopback = false, heartbeat_interval_ms = 100, failure_delay = 0.0, failure_duration = 10.0, failure_offset = 1.0))]
+    // Mirrors the Python keyword-only signature.
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,

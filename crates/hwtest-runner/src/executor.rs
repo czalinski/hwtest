@@ -214,6 +214,7 @@ impl Executor {
     /// # Errors
     /// [`StartError`] if busy, the test case/mode is invalid, or the script
     /// cannot be started.
+    // Sequential setup of one child process (env, pipes, reader threads).
     #[allow(clippy::too_many_lines)]
     pub fn start(&self, test_case_id: &str, mode: &str) -> Result<RunStatus, StartError> {
         let station = &self.config.station;

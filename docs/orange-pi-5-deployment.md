@@ -88,68 +88,16 @@ daqhats_list_boards
 
 ## 2. Build Docker Image
 
-### 2.1 Create Dockerfile
+### 2.1 Dockerfile
 
-Create `Dockerfile` in the repository root:
+The repository root `Dockerfile` builds the image: the Rust `hwtest-rack` binary
+(cargo, in a `rust:` builder stage), MCC's `libdaqhats` built from source, and a slim
+Debian runtime. The default rack is `configs/orange_pi_5_rack.yaml`; choose another
+rack with `--build-arg RACK_CONFIG=configs/<rack>.yaml`. The repository's
+`.dockerignore` keeps `target/`, `dist/` and virtual environments out of the build context.
 
-```dockerfile
-# hwtest-rack Docker image for Orange Pi 5 / ARM64
-FROM python:3.11-slim-bookworm
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    build-essential \
-    python3-dev \
-    i2c-tools \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install daqhats library
-WORKDIR /tmp
-RUN git clone https://github.com/mccdaq/daqhats.git \
-    && cd daqhats \
-    && pip install . \
-    && cd / \
-    && rm -rf /tmp/daqhats
-
-# Create app directory
-WORKDIR /app
-
-# Copy packages
-COPY hwtest-core ./hwtest-core
-COPY hwtest-mcc ./hwtest-mcc
-COPY hwtest-rack ./hwtest-rack
-COPY configs ./configs
-
-# Install Python packages
-RUN pip install --no-cache-dir \
-    ./hwtest-core \
-    ./hwtest-mcc \
-    ./hwtest-rack
-
-# Expose API port
-EXPOSE 8000
-
-# Default command
-CMD ["hwtest-rack", "/app/configs/orange_pi_5_rack.yaml", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### 2.2 Create .dockerignore
-
-```bash
-cat > .dockerignore << 'EOF'
-.git
-.venv
-__pycache__
-*.pyc
-*.egg-info
-.pytest_cache
-.mypy_cache
-docs
-EOF
-```
-
-### 2.3 Build and Push Image
+### 2.2 Build and Push Image
 
 ```bash
 # Build for ARM64

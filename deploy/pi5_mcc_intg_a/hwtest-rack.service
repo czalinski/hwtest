@@ -10,12 +10,13 @@ User=hwtest
 Group=hwtest
 WorkingDirectory=/opt/hwtest
 
-# Environment
-Environment="PATH=/opt/hwtest/venv/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="PYTHONUNBUFFERED=1"
+# Optional settings in /etc/hwtest/rack.env, e.g.
+#   HWTEST_RACK_SERIAL=001                  (calibration from /etc/hwtest/racks)
+#   HWTEST_NATS_URL=nats://localhost:4222   (stream telemetry to NATS)
+EnvironmentFile=-/etc/hwtest/rack.env
 
-# Command
-ExecStart=/opt/hwtest/venv/bin/hwtest-rack /opt/hwtest/configs/pi5_mcc_intg_a_rack.yaml --host 0.0.0.0 --port 8080
+# Rust rack server (libdaqhats is loaded at runtime)
+ExecStart=/opt/hwtest/bin/hwtest-rack serve /opt/hwtest/configs/pi5_mcc_intg_a_rack.yaml --host 0.0.0.0 --port 8080
 
 # Restart policy
 Restart=always
@@ -25,7 +26,7 @@ RestartSec=10
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/hwtest
+ReadWritePaths=/opt/hwtest /etc/hwtest
 PrivateTmp=true
 
 # Hardware access - required for MCC HATs

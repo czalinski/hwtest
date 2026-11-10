@@ -440,6 +440,7 @@ impl Simulator {
             elapsed >= f.delay
         } else {
             let period = f.delay + f.duration;
+            // elapsed and period are positive and finite; whole cycles fit in u64.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let cycle = (elapsed / period) as u64;
             f.cycles = f.cycles.max(cycle);

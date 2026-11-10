@@ -18,7 +18,8 @@ Python test scripts**. Everything else is framework code and is written in **Rus
 | Test cases for specific hardware | **Python** | The only Python that is not glue. Plain synchronous code. |
 | Test definitions, bounds, rack/station configuration | **YAML** | Reviewed by EEs and managers |
 | Everything else: data types, wire protocols, test definitions & monitor engine, NATS streaming, loggers, results DB, rack & instrument drivers, runner/rack services, UUT simulator | **Rust** (`crates/`) | Performance on SBCs, latency budget, correctness |
-| Python API over the Rust core | **PyO3 bindings** (`hwtest-<pkg>/native/`) | Conversion glue only, no domain logic |
+| Python API over the Rust core | **PyO3 bindings** (`hwtest-core/native/`, one extension `hwtest_core._native`) | Conversion glue only, no domain logic |
+| Test-script SDK (`import hwtest`) | **Python** (`hwtest-sdk/`) | Thin, typed facade over the bindings: `Test`, `Context`, decorators, CLI |
 
 ### Execution model (decided 2026-11-09)
 
@@ -29,6 +30,23 @@ Python test scripts**. Everything else is framework code and is written in **Rus
   streaming on its own threads and releases the GIL during blocking I/O.
 - **Instrument drivers are Rust.** As an escape hatch, a rack YAML may name a Python driver class
   for bring-up of a one-off instrument; maintained drivers are ported to Rust.
+
+### Repository layout (migration complete, 2026-11-10)
+
+| Path | Contents |
+|------|----------|
+| `crates/hwtest-core` | Data types, streaming protocol, bounds, monitor engine |
+| `crates/hwtest-spec` | YAML test definitions, rack/instance/station configs |
+| `crates/hwtest-nats`, `hwtest-logger`, `hwtest-db` | NATS JetStream, CSV/InfluxDB loggers, SQLite results |
+| `crates/hwtest-instruments` | Drivers (MCC DAQ HATs, Waveshare AD/DA, SCPI/BK PSU, CAN, MCP23017) + emulators |
+| `crates/hwtest-rack`, `hwtest-run`, `hwtest-runner` | Rack runtime/server, run engine, station runner service |
+| `crates/hwtest-uut-sim` | UUT simulator service + client |
+| `hwtest-core/` | Python package = the PyO3 extension (`hwtest_core._native`) |
+| `hwtest-sdk/` | The `hwtest` package test scripts import |
+| `hwtest-intg/` | Test cases for the integration bench (YAML + scripts) |
+
+Product test cases live in the same shape: a `configs/` directory of YAML and a `scripts/`
+directory of `hwtest` scripts.
 
 ### Rules
 
@@ -86,14 +104,16 @@ Python test scripts**. Everything else is framework code and is written in **Rus
 - `cargo fmt` (100 columns, see `rustfmt.toml`) before every commit
 - `cargo clippy --workspace --all-targets` with `clippy::pedantic` must produce no warnings;
   any `#[allow(...)]` must carry a justification comment
-- `unsafe` code is forbidden (`unsafe_code = "forbid"` workspace lint)
+- `unsafe` code is denied (`unsafe_code = "deny"` workspace lint); the only exception is the
+  libdaqhats FFI module (`crates/hwtest-instruments/src/daqhats/ffi.rs`), where every `unsafe`
+  block carries a `// SAFETY:` comment
 - All public items have doc comments (`missing_docs` lint); fallible functions document `# Errors`
 
 ### Structure
 
 - Pure-Rust crates live in `crates/` and must not depend on PyO3
-- PyO3 binding crates live next to the Python package they back (`hwtest-<pkg>/native/`) and
-  contain only conversion glue, no domain logic
+- All PyO3 bindings live in the single binding crate `hwtest-core/native/` (pyclasses cannot be
+  shared across extension modules) and contain only conversion glue, no domain logic
 - Python extension modules use the stable ABI (`abi3-py310`) so one wheel serves all Python versions
 
 ### Testing
