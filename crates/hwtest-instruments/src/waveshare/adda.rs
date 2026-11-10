@@ -46,6 +46,9 @@ pub struct AdcChannel {
     /// Ignored (rack YAML compatibility).
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
+    /// Free-text note (ignored).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// DAC channel.
@@ -63,6 +66,9 @@ pub struct DacChannel {
     /// Ignored (rack YAML compatibility).
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
+    /// Free-text note (ignored).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Configuration.
@@ -412,8 +418,10 @@ mod tests {
         emu.set_input(2, 0.5);
         assert!((b.read(&"uut_in".into()).unwrap() - 1.234).abs() < 1e-6);
         assert!((b.read(&"diff".into()).unwrap() - 1.5).abs() < 1e-6);
-        emu.set_input(0, -3.0); // beyond -Vref clamps to full scale
-        assert!((b.read(&ChannelRef::Id(0)).unwrap() + 2.5).abs() < 1e-6);
+        emu.set_input(0, 4.0); // full scale is ±2·Vref = ±5 V
+        assert!((b.read(&ChannelRef::Id(0)).unwrap() - 4.0).abs() < 1e-6);
+        emu.set_input(0, -6.0); // beyond full scale clamps
+        assert!((b.read(&ChannelRef::Id(0)).unwrap() + 5.0).abs() < 1e-6);
     }
 
     #[test]

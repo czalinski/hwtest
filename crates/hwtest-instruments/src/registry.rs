@@ -182,6 +182,7 @@ pub fn open_instrument(
                         logical_name: "output".into(),
                         max_voltage: None,
                         max_current: None,
+                        description: None,
                     });
                 }
                 return Ok(Box::new(BkPsu::with_connection(

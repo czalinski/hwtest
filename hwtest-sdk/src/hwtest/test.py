@@ -82,7 +82,7 @@ def _resolve(path: str | Path, base: Path) -> Path:
     return p
 
 
-class Test:
+class Test:  # pylint: disable=too-many-instance-attributes
     """A test case.
 
     Args:
@@ -146,7 +146,7 @@ class Test:
                 print(f"warning: Python driver for {name!r} is not ready", file=sys.stderr)
         return r
 
-    def run(
+    def run(  # pylint: disable=too-many-locals,too-many-arguments
         self,
         *,
         mode: str = "functional",
@@ -197,21 +197,44 @@ class Test:
         variables (shown in ``--help``), which is how the runner passes them."""
         env = os.environ
         p = argparse.ArgumentParser(description=self.definition.test_case.name or None)
-        p.add_argument("--mode", default=env.get("HWTEST_MODE", env.get("TEST_MODE", "functional")),
-                       choices=["functional", "hass", "halt"], help="[HWTEST_MODE]")
+        p.add_argument(
+            "--mode",
+            default=env.get("HWTEST_MODE", env.get("TEST_MODE", "functional")),
+            choices=["functional", "hass", "halt"],
+            help="[HWTEST_MODE]",
+        )
         p.add_argument("--cycles", type=int, default=None, help="stop after N cycles (hass/halt)")
-        p.add_argument("--serial", default=env.get("HWTEST_RACK_SERIAL"),
-                       help="rack instance serial (calibration) [HWTEST_RACK_SERIAL]")
-        p.add_argument("--rack", default=env.get("HWTEST_RACK"), help="rack YAML or class [HWTEST_RACK]")
-        p.add_argument("--emulate", action="store_true", default=_env_flag("HWTEST_EMULATE"),
-                       help="use instrument emulators [HWTEST_EMULATE]")
-        p.add_argument("--nats", default=env.get("HWTEST_NATS_URL"), help="NATS URL [HWTEST_NATS_URL]")
+        p.add_argument(
+            "--serial",
+            default=env.get("HWTEST_RACK_SERIAL"),
+            help="rack instance serial (calibration) [HWTEST_RACK_SERIAL]",
+        )
+        p.add_argument(
+            "--rack", default=env.get("HWTEST_RACK"), help="rack YAML or class [HWTEST_RACK]"
+        )
+        p.add_argument(
+            "--emulate",
+            action="store_true",
+            default=_env_flag("HWTEST_EMULATE"),
+            help="use instrument emulators [HWTEST_EMULATE]",
+        )
+        p.add_argument(
+            "--nats", default=env.get("HWTEST_NATS_URL"), help="NATS URL [HWTEST_NATS_URL]"
+        )
         p.add_argument("--db", default=env.get("HWTEST_DB"), help="results database [HWTEST_DB]")
-        p.add_argument("--unit", action="append", default=[], metavar="SLOT=SERIAL",
-                       help="UUT serial for a slot, e.g. 0=SN123 (repeatable)")
-        p.add_argument("--offsite", action="store_true",
-                       default=_env_flag("HWTEST_OFFSITE") or _env_flag("OFFSITE_MODE"),
-                       help="skip loggers marked ignore_offsite [HWTEST_OFFSITE]")
+        p.add_argument(
+            "--unit",
+            action="append",
+            default=[],
+            metavar="SLOT=SERIAL",
+            help="UUT serial for a slot, e.g. 0=SN123 (repeatable)",
+        )
+        p.add_argument(
+            "--offsite",
+            action="store_true",
+            default=_env_flag("HWTEST_OFFSITE") or _env_flag("OFFSITE_MODE"),
+            help="skip loggers marked ignore_offsite [HWTEST_OFFSITE]",
+        )
         p.add_argument("--no-loggers", action="store_true", help="do not start the YAML loggers")
         p.add_argument("--run-id", default=env.get("HWTEST_RUN_ID"), help="[HWTEST_RUN_ID]")
         args = p.parse_args(argv)
@@ -229,9 +252,17 @@ class Test:
         signal.signal(signal.SIGTERM, _term)
         try:
             summary = self.run(
-                mode=args.mode, cycles=args.cycles, serial=args.serial, rack=args.rack,
-                emulate=args.emulate, nats=args.nats, db=args.db, units=units,
-                offsite=args.offsite, loggers=not args.no_loggers, run_id=args.run_id,
+                mode=args.mode,
+                cycles=args.cycles,
+                serial=args.serial,
+                rack=args.rack,
+                emulate=args.emulate,
+                nats=args.nats,
+                db=args.db,
+                units=units,
+                offsite=args.offsite,
+                loggers=not args.no_loggers,
+                run_id=args.run_id,
                 events="stdout" if _env_flag("HWTEST_EVENTS") else None,
             )
         except SpecError as e:

@@ -6,7 +6,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from hwtest_core._native import Rack, Session
+import os
+
+from hwtest_core._native import CanBus, Rack, Session, UutClient
 from hwtest_core.spec import MonitorState
 from hwtest_core.types.monitor import MonitorResult
 
@@ -76,6 +78,22 @@ class Context:
             )
         return self._rack
 
+    @property
+    def uut(self) -> UutClient:
+        """The UUT simulator client (from ``UUT_URL``, set by the runner)."""
+        if "uut" not in self._extras:
+            self._extras["uut"] = UutClient()
+        uut: UutClient = self._extras["uut"]
+        return uut
+
+    @property
+    def can(self) -> CanBus:
+        """The rack's CAN bus (``CAN_INTERFACE``, default ``can0``)."""
+        if "can" not in self._extras:
+            self._extras["can"] = CanBus(os.environ.get("CAN_INTERFACE", "can0"))
+        bus: CanBus = self._extras["can"]
+        return bus
+
     def param(self, name: str) -> Any:
         """A parameter: the current state's value if it overrides it, else ``case_parameters``."""
         return self._session.param(name)
@@ -101,8 +119,8 @@ class Context:
     def transition(self, description: str = "ramping") -> Iterator[None]:
         """Mark a ramp into the current state; monitors skip inside the block::
 
-            with ctx.transition("chamber to 85 C"):
-                chamber.set(85); wait_until_stable()
+        with ctx.transition("chamber to 85 C"):
+            chamber.set(85); wait_until_stable()
         """
         self._session.begin_transition(description)
         try:

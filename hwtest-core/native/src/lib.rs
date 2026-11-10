@@ -70,6 +70,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_class::<sdk::PyRack>()?;
     m.add_class::<sdk::PySession>()?;
+    m.add_class::<sdk::PyCanBus>()?;
+    m.add_class::<sdk::PyUutClient>()?;
+    m.add_class::<sdk::PyUutSimulator>()?;
     m.add("HardwareError", m.py().get_type::<sdk::HardwareError>())?;
     m.add_function(wrap_pyfunction!(sdk::parse_event_line, m)?)?;
     m.add_function(wrap_pyfunction!(sdk::_roundtrip, m)?)?;

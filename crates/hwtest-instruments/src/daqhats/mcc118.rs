@@ -33,6 +33,9 @@ pub struct Channel {
     /// Ignored (accepted for rack YAML compatibility).
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
+    /// Free-text note (ignored).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Configuration.

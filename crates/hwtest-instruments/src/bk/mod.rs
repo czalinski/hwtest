@@ -38,6 +38,9 @@ pub struct PsuChannelConfig {
     /// Software current limit.
     #[serde(default)]
     pub max_current: Option<f64>,
+    /// Free-text note (ignored).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Driver configuration.
@@ -78,6 +81,7 @@ impl BkPsu {
                 logical_name: "output".into(),
                 max_voltage: None,
                 max_current: None,
+                description: None,
             });
         }
         let transport =
@@ -243,12 +247,14 @@ mod tests {
                 logical_name: "dut_5v".into(),
                 max_voltage: Some(5.5),
                 max_current: Some(1.0),
+                description: None,
             },
             PsuChannelConfig {
                 id: 2,
                 logical_name: "dut_12v".into(),
                 max_voltage: None,
                 max_current: None,
+                description: None,
             },
         ];
         (BkPsu::with_connection(conn, channels).unwrap(), emu)
@@ -297,6 +303,7 @@ mod tests {
                 logical_name: "out".into(),
                 max_voltage: None,
                 max_current: None,
+                description: None,
             }],
         )
         .unwrap();

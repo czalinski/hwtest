@@ -210,8 +210,12 @@ impl Ads1256 {
         Ok(if v >= 0x80_0000 { v - 0x100_0000 } else { v })
     }
 
+    /// Full scale is ±2·VREF/PGA (datasheet "Analog input range"; Waveshare's
+    /// example uses `raw * 5.0 / 0x7FFFFF` with VREF = 2.5 V). The original
+    /// Python driver used ±VREF/PGA and read half the true voltage.
     fn to_volts(&self, raw: i32) -> f64 {
-        f64::from(raw) * self.config.vref / (8_388_607.0 * f64::from(1u32 << self.config.gain))
+        f64::from(raw) * 2.0 * self.config.vref
+            / (8_388_607.0 * f64::from(1u32 << self.config.gain))
     }
 
     /// Single-ended reading of `channel` (0-7) against AINCOM.

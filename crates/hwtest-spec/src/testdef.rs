@@ -140,14 +140,28 @@ struct RawLogger {
     kwargs: Map<String, Value>,
     #[serde(default, deserialize_with = "null_as_default")]
     topics: Vec<String>,
-    #[serde(default = "yes")]
-    enabled: bool,
+    /// `true`/`false`, or text such as `"${TELEMETRY_ENABLED:false}"`.
+    #[serde(default)]
+    enabled: Option<Value>,
     #[serde(default)]
     ignore_offsite: bool,
 }
 
-fn yes() -> bool {
-    true
+/// Resolves a logger's `enabled:` (bool, or text with `${VAR:default}`).
+fn logger_enabled(value: Option<&Value>) -> std::result::Result<bool, String> {
+    let text = match value {
+        None => return Ok(true),
+        Some(Value::Bool(b)) => return Ok(*b),
+        Some(Value::String(s)) => s,
+        Some(other) => return Err(format!("must be true/false, got {other}")),
+    };
+    let resolved = crate::env::substitute_env(&Value::String(text.clone()))
+        .map_err(|m| format!("environment variable(s) not set: {}", m.join(", ")))?;
+    match resolved.as_str().unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "" | "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(format!("must be true/false, got {other:?}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -599,7 +613,10 @@ fn validate(raw: RawTestDef, file: Option<PathBuf>) -> Result<TestDefinition> {
                 kind,
                 kwargs: l.kwargs,
                 topics: l.topics,
-                enabled: l.enabled,
+                enabled: logger_enabled(l.enabled.as_ref()).unwrap_or_else(|m| {
+                    issues.push(lloc, format!("{path}.enabled"), m);
+                    false
+                }),
                 ignore_offsite: l.ignore_offsite,
             },
         );
@@ -970,6 +987,23 @@ monitors:
             ),
             "{e}"
         );
+    }
+
+    #[test]
+    fn logger_enabled_from_environment() {
+        let doc = |enabled: &str| {
+            format!("test_case: {{id: t}}\nmonitor_states: {{a: {{}}}}\nloggers:\n  l: {{kind: csv, kwargs: {{output_dir: x}}, enabled: {enabled}}}\n")
+        };
+        let on = |enabled: &str| {
+            TestDefinition::from_yaml_str(&doc(enabled), None).unwrap().enabled_loggers(false).len() == 1
+        };
+        assert!(on("true") && !on("false") && on("\"yes\""));
+        assert!(!on("\"${HWTEST_SPEC_TEST_UNSET_FLAG:false}\""));
+        assert!(on("\"${HWTEST_SPEC_TEST_UNSET_FLAG:1}\""));
+        let e = errors(&doc("\"maybe\""));
+        assert!(e.iter().any(|m| m.contains("loggers.l.enabled: must be true/false")), "{e:?}");
+        let e = errors(&doc("\"${HWTEST_SPEC_TEST_UNSET_FLAG}\""));
+        assert!(e.iter().any(|m| m.contains("not set: HWTEST_SPEC_TEST_UNSET_FLAG")), "{e:?}");
     }
 
     #[test]

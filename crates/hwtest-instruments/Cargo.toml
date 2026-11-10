@@ -29,6 +29,8 @@ libloading = "0.9"
 serialport = { version = "4", default-features = false }
 spidev = "0.7"
 gpiocdev = "0.8"
+socketcan = { version = "4", default-features = false }
+i2cdev = "0.6"
 
 [dev-dependencies]
 serde_json.workspace = true

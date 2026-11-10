@@ -69,7 +69,7 @@ class TestRun:
         summary = test.run(emulate=True, loggers=False)
         assert summary.outcome == "error"
         assert summary.exit_code == 2
-        assert "unknown channel \"respnse\"" in summary.message
+        assert 'unknown channel "respnse"' in summary.message
 
     def test_ctx_api(self) -> None:
         test = Test(FIXTURES / "loop_test.yaml")
@@ -124,7 +124,9 @@ class TestRack:
         assert rack.status()["state"] == "ready"
         rack.close()
 
-    def test_python_escape_hatch_driver(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_python_escape_hatch_driver(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         (tmp_path / "labdrivers.py").write_text(
             "class Meter:\n"
             "    model = 'Lab Meter'\n"
@@ -157,11 +159,17 @@ class TestRack:
 
 
 class TestCommandLine:
-    def run_script(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def run_script(
+        self, *args: str, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         e = {**os.environ, **(env or {})}
         return subprocess.run(
             [sys.executable, str(FIXTURES / "loop_script.py"), "--emulate", *args],
-            capture_output=True, text=True, env=e, timeout=60, check=False,
+            capture_output=True,
+            text=True,
+            env=e,
+            timeout=60,
+            check=False,
         )
 
     def test_exit_code_and_summary(self) -> None:
@@ -170,9 +178,15 @@ class TestCommandLine:
         assert "loop_test [functional] PASSED" in r.stdout
 
     def test_events_for_runner(self) -> None:
-        r = self.run_script("--mode", "hass", "--cycles", "2", "--no-loggers", env={"HWTEST_EVENTS": "1"})
+        r = self.run_script(
+            "--mode", "hass", "--cycles", "2", "--no-loggers", env={"HWTEST_EVENTS": "1"}
+        )
         assert r.returncode == 0, r.stderr
-        events = [json.loads(l[len("@@hwtest "):]) for l in r.stdout.splitlines() if l.startswith("@@hwtest ")]
+        events = [
+            json.loads(l[len("@@hwtest ") :])
+            for l in r.stdout.splitlines()
+            if l.startswith("@@hwtest ")
+        ]
         kinds = [e["event"] for e in events]
         assert kinds[0] == "run_started" and kinds[-1] == "run_finished"
         assert kinds.count("cycle_completed") == 2

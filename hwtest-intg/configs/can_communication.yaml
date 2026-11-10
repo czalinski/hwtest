@@ -1,0 +1,36 @@
+# =============================================================================
+# CAN Communication Test
+# =============================================================================
+# UUT heartbeat (0x100, 10 Hz, 8-byte counter) and echo (id + 0x10).
+# Each check is measured as a number so the YAML decides pass/fail:
+# 1 = OK, 0 = not OK; rates in Hz.
+
+test_case:
+  id: can_communication
+  name: CAN Communication Test
+  version: "2.0.0"
+
+rack: pi5_mcc_intg_a_rack
+
+case_parameters:
+  heartbeat_id: 0x100
+  test_message_id: 0x200
+  echo_offset: 0x10
+  collect_seconds: 1.0
+
+monitor_states:
+  can: {name: CAN}
+
+monitors:
+  can_monitor:
+    kind: bounds
+    kwargs.0: {}
+    configuration:
+      can:
+        heartbeat_running: {good_values: [1]}
+        heartbeat_rate_hz: {within_range: [10.0, 1.0]}
+        heartbeat_counter_ok: {good_values: [1]}
+        echo_ok: {good_values: [1]}
+        echo_filter_ok: {good_values: [1]}
+        echo_disabled_ok: {good_values: [1]}
+        uut_received_ok: {good_values: [1]}

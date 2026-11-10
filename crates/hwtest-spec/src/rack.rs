@@ -233,12 +233,11 @@ impl RackConfig {
     /// [`crate::SpecError::NotFound`] if no file matches, else as [`RackConfig::from_file`].
     pub fn find(rack_class: &str, search_paths: Option<&[PathBuf]>) -> Result<Self> {
         let default;
-        let dirs = match search_paths {
-            Some(d) => d,
-            None => {
-                default = crate::search::rack_search_paths(&[]);
-                &default
-            }
+        let dirs = if let Some(d) = search_paths {
+            d
+        } else {
+            default = crate::search::rack_search_paths(&[]);
+            &default
         };
         let path = crate::search::require_first(
             &format!("Rack config '{rack_class}'"),
@@ -421,7 +420,7 @@ mod tests {
         for f in [
             "configs/pi5_mcc_intg_a_rack.yaml",
             "configs/orange_pi_5_rack.yaml",
-            "hwtest-intg/src/hwtest_intg/configs/pi5_mcc_intg_a_rack.yaml",
+            "hwtest-intg/configs/pi5_mcc_intg_a_rack.yaml",
         ] {
             let r = RackConfig::from_file(repo(f)).unwrap_or_else(|e| panic!("{e}"));
             assert!(!r.instruments.is_empty());

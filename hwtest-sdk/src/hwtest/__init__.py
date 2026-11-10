@@ -22,7 +22,7 @@ bounds, logging, NATS publishing, results database, stopping cleanly on Ctrl-C
 Run it with ``python voltage_echo.py --mode hass`` (``--help`` lists options).
 """
 
-from hwtest_core._native import HardwareError, Rack
+from hwtest_core._native import CanBus, HardwareError, Rack, UutClient, UutSimulator
 from hwtest_core.errors import SpecError
 
 from hwtest.context import Context, State
@@ -31,6 +31,7 @@ from hwtest.test import RunSummary, Test
 __version__ = "0.1.0"
 
 __all__ = [
+    "CanBus",
     "Context",
     "HardwareError",
     "Rack",
@@ -38,4 +39,6 @@ __all__ = [
     "SpecError",
     "State",
     "Test",
+    "UutClient",
+    "UutSimulator",
 ]

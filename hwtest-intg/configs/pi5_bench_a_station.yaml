@@ -16,8 +16,21 @@ rack:
 uut:
   url: "http://192.168.68.4:8080"   # UUT simulator URL
 
+# Passed to test scripts as environment variables.
+environment:
+  CAN_INTERFACE: can0
+  CSV_LOG_DIR: /var/lib/hwtest/logs
+
 test_cases:
   - id: "voltage_echo_monitor"
     name: "Voltage Echo Monitor"
-    definition: "voltage_echo_monitor"   # test definition YAML name (searched)
+    script: ../scripts/voltage_echo_monitor.py
     modes: [functional, hass, halt]
+  - id: "analog_paths"
+    name: "Analog Paths"
+    script: ../scripts/analog_paths.py
+    modes: [functional]
+  - id: "can_communication"
+    name: "CAN Communication"
+    script: ../scripts/can_communication.py
+    modes: [functional, hass]

@@ -317,16 +317,15 @@ impl DbRecorder {
         let run = db.create_test_run(test_case, options.mode.run_type())?;
         let mut units = IndexMap::new();
         for (slot, serial) in &options.units {
-            let unit = match db.get_unit_by_serial(serial)? {
-                Some(u) => u.id,
-                None => {
-                    let ut = db.get_unit_type_by_name(&options.unit_type)?.map_or(0, |u| u.id);
-                    let rev = match db.get_design_revision_by_name(ut, "unspecified")? {
-                        Some(r) => r.id,
-                        None => db.create_design_revision(ut, "unspecified")?,
-                    };
-                    db.create_unit(serial, rev)?
-                }
+            let unit = if let Some(u) = db.get_unit_by_serial(serial)? {
+                u.id
+            } else {
+                let ut = db.get_unit_type_by_name(&options.unit_type)?.map_or(0, |u| u.id);
+                let rev = match db.get_design_revision_by_name(ut, "unspecified")? {
+                    Some(r) => r.id,
+                    None => db.create_design_revision(ut, "unspecified")?,
+                };
+                db.create_unit(serial, rev)?
             };
             // The schema numbers slots from 1; test definitions number them from 0.
             db.add_unit_to_run(run, unit, i64::from(*slot) + 1)?;
@@ -623,6 +622,7 @@ impl Session {
     ///
     /// # Errors
     /// [`RunError::Measurement`] outside a state or when the fields change.
+    #[allow(clippy::too_many_lines)]
     pub fn measure(
         &mut self,
         values: &IndexMap<String, f64>,
@@ -636,28 +636,25 @@ impl Session {
             return Err(RunError::Measurement("measure() needs at least one value".into()));
         }
         let topic = topic.unwrap_or(&self.def.test_case.id).to_string();
-        let schema = match self.schemas.get(&topic) {
-            Some(s) => {
-                let names: Vec<&str> = s.fields().iter().map(|f| f.name.as_str()).collect();
-                if names != values.keys().map(String::as_str).collect::<Vec<_>>() {
-                    return Err(RunError::Measurement(format!(
-                        "measure() fields for topic {topic:?} must stay the same: expected {names:?}, got {:?}",
-                        values.keys().collect::<Vec<_>>()
-                    )));
-                }
-                s.clone()
+        let schema = if let Some(s) = self.schemas.get(&topic) {
+            let names: Vec<&str> = s.fields().iter().map(|f| f.name.as_str()).collect();
+            if names != values.keys().map(String::as_str).collect::<Vec<_>>() {
+                return Err(RunError::Measurement(format!(
+                    "measure() fields for topic {topic:?} must stay the same: expected {names:?}, got {:?}",
+                    values.keys().collect::<Vec<_>>()
+                )));
             }
-            None => {
-                let s = StreamSchema::new(
-                    topic.clone(),
-                    values.keys().map(|k| StreamField::new(k.clone(), DataType::F64, "")).collect(),
-                );
-                for l in &mut self.loggers {
-                    l.logger.register_schema(&topic, s.clone());
-                }
-                self.schemas.insert(topic.clone(), s.clone());
-                s
+            s.clone()
+        } else {
+            let s = StreamSchema::new(
+                topic.clone(),
+                values.keys().map(|k| StreamField::new(k.clone(), DataType::F64, "")).collect(),
+            );
+            for l in &mut self.loggers {
+                l.logger.register_schema(&topic, s.clone());
             }
+            self.schemas.insert(topic.clone(), s.clone());
+            s
         };
         let ts = now_ns();
         let data = StreamData {

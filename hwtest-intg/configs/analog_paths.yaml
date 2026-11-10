@@ -1,0 +1,32 @@
+# =============================================================================
+# Analog Path Test
+# =============================================================================
+# Checks both analog directions separately:
+#   rack_dac (MCC 152 AO0) -> UUT ADC CH0           (rack_to_uut_error)
+#   UUT DAC CH0          -> rack_adc (MCC 118 CH0)  (uut_to_rack_error)
+# Errors are measured value minus target, so one bound covers every state.
+
+test_case:
+  id: analog_paths
+  name: Analog Path Test
+  version: "2.0.0"
+  description: Rack-to-UUT and UUT-to-rack analog paths at three voltages.
+
+rack: pi5_mcc_intg_a_rack
+
+case_parameters:
+  settling_time_seconds: 0.05
+
+monitor_states:
+  low: {name: Low, target_voltage: 1.0}
+  mid: {name: Mid, target_voltage: 2.5}
+  high: {name: High, target_voltage: 4.0}
+
+monitors:
+  analog_path_monitor:
+    kind: bounds
+    kwargs.0: {}
+    configuration:
+      default:
+        rack_to_uut_error: {within_range: [0.0, 0.1]}
+        uut_to_rack_error: {within_range: [0.0, 0.1]}

@@ -90,8 +90,8 @@ state_sequence:
 #
 # Monitors continuously check measurement values against state-dependent bounds.
 # Each monitor specifies:
-#   - module/class: Python module and class for dynamic loading
-#   - kwargs: Arguments passed to monitor constructor
+#   - kind: bounds
+#   - kwargs.N: the UUT in slot N this monitor judges (failures count against it)
 #   - configuration: Bounds per field, per state
 #
 # Bound types:
@@ -108,8 +108,7 @@ state_sequence:
 
 monitors:
   echo_voltage_monitor:
-    module: hwtest_testcase
-    class: Monitor
+    kind: bounds
     # UUT monitor for slot 0 - failures indicate the UUT is bad
     kwargs.0:
       channel: echo_voltage
@@ -141,18 +140,19 @@ monitors:
 # telemetry rather than per-UUT data.
 #
 # Each logger specifies:
-#   - module/class: Python module and class for dynamic loading
-#   - kwargs: Arguments passed to logger constructor
-#   - topics: List of topics this logger should subscribe to
-#   - enabled: Whether this logger is active (default: true)
-#   - ignore_offsite: If true, logger is skipped when OFFSITE_MODE=1
+#   - kind: csv or influxdb
+#   - kwargs: logger settings (${VAR} / ${VAR:default} are expanded)
+#   - topics: measurement topics to log (default topic = test case id)
+#   - enabled: true/false or "${VAR:default}" (default: true)
+#   - ignore_offsite: if true, skipped with --offsite
 
 loggers:
-  # InfluxDB logger for real-time telemetry visualization
-  # Skipped in offsite mode since it requires network connectivity
+  # InfluxDB logger for real-time telemetry visualization.
+  # Off unless TELEMETRY_ENABLED=1 (then INFLUXDB_TOKEN is required).
+  # Skipped in offsite mode since it requires network connectivity.
   influxdb_logger:
-    module: hwtest_logger
-    class: InfluxDbStreamLogger
+    kind: influxdb
+    enabled: "${TELEMETRY_ENABLED:false}"
     ignore_offsite: true
     kwargs:
       url: "${INFLUXDB_URL:http://localhost:8086}"
@@ -163,21 +163,20 @@ loggers:
       batch_size: 100
       flush_interval_ms: 1000
     topics:
-      - voltage_echo
+      - voltage_echo_monitor   # measurements are published under the test case id
 
   # CSV logger for local file storage
   # Works in offsite mode - data can be imported to InfluxDB later via:
   #   hwtest-import-csv /path/to/logs --url http://influx:8086 --token <token>
   # Directory structure: {output_dir}/{test_type}/{test_case_id}/{test_run_id}/
   csv_logger:
-    module: hwtest_logger
-    class: CsvStreamLogger
+    kind: csv
     kwargs:
       output_dir: "${CSV_LOG_DIR:./logs}"
       organize_by_tags: true
       buffer_size: 100
     topics:
-      - voltage_echo
+      - voltage_echo_monitor   # measurements are published under the test case id
 
 # =============================================================================
 # Functional Requirements (optional)

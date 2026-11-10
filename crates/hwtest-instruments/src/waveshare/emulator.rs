@@ -103,7 +103,7 @@ impl Model {
         let mux = self.regs[1];
         let v = self.input_volts(mux >> 4) - self.input_volts(mux & 0x0F);
         let gain = f64::from(1u32 << (self.regs[2] & 0x07));
-        let code = (v * gain * 8_388_607.0 / self.pins.adc_vref)
+        let code = (v * gain * 8_388_607.0 / (2.0 * self.pins.adc_vref))
             .round()
             .clamp(-8_388_608.0, 8_388_607.0) as i32;
         let u = code.cast_unsigned() & 0x00FF_FFFF;

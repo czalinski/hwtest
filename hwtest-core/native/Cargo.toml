@@ -21,6 +21,7 @@ hwtest-spec.workspace = true
 hwtest-run.workspace = true
 hwtest-rack.workspace = true
 hwtest-instruments.workspace = true
+hwtest-uut-sim.workspace = true
 pyo3.workspace = true
 indexmap.workspace = true
 serde.workspace = true

@@ -1,0 +1,35 @@
+[package]
+name = "hwtest-uut-sim"
+description = "UUT simulator (CAN, ADC/DAC, GPIO, fault injection) with REST API and client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "hwtest-uut-sim"
+path = "src/bin/uut_sim.rs"
+
+# Same program under the old Python command name.
+[[bin]]
+name = "pi4-waveshare-sim"
+path = "src/bin/pi4_waveshare_sim.rs"
+
+[dependencies]
+hwtest-instruments.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+tokio.workspace = true
+axum = "0.8"
+ureq = { version = "3", default-features = false }
+
+[dev-dependencies]
+tower-service = "0.3"
+
+[lints]
+workspace = true

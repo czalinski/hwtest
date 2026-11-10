@@ -33,6 +33,9 @@ pyo3::create_exception!(
     "A rack, instrument or channel operation failed."
 );
 
+/// `(instrument, module, function, kwargs)`.
+type PythonDriverEntry = (String, String, String, Py<PyAny>);
+
 fn hw_err(e: impl std::fmt::Display) -> PyErr {
     HardwareError::new_err(e.to_string())
 }
@@ -54,8 +57,8 @@ fn json_to_py(py: Python<'_>, v: &impl serde::Serialize) -> PyResult<Py<PyAny>> 
 ///
 /// The object must provide `get_identity()` (an `InstrumentIdentity` or a
 /// dict with manufacturer/model/serial/firmware) and `channels()` (a list of
-/// dicts with `name`, `id` and `kind`: analog_in, analog_out, temperature,
-/// digital_in, digital_out). Reads call `read(name)`, writes `write(name, value)`.
+/// dicts with `name`, `id` and `kind`: `analog_in`, `analog_out`, temperature,
+/// `digital_in`, `digital_out`). Reads call `read(name)`, writes `write(name, value)`.
 struct PyDriver {
     obj: Py<PyAny>,
     model: String,
@@ -410,7 +413,7 @@ impl PyRack {
 
     /// Python escape-hatch drivers declared in the rack YAML:
     /// `[(instrument, module, function, kwargs)]`.
-    fn python_drivers(&self, py: Python<'_>) -> PyResult<Vec<(String, String, String, Py<PyAny>)>> {
+    fn python_drivers(&self, py: Python<'_>) -> PyResult<Vec<PythonDriverEntry>> {
         let r = lock(&self.rack);
         r.config()
             .instruments
@@ -553,8 +556,8 @@ fn error_message(py: Python<'_>, e: &PyErr) -> String {
 
 #[pymethods]
 impl PySession {
-    /// Prepares a run. `options` keys: mode, max_cycles, run_id, nats_url,
-    /// db_path, unit_type, units ({slot: serial}), offsite, loggers, events
+    /// Prepares a run. `options` keys: mode, `max_cycles`, `run_id`, `nats_url`,
+    /// `db_path`, `unit_type`, units ({slot: serial}), offsite, loggers, events
     /// ("stdout" or None), tags.
     #[new]
     #[pyo3(signature = (definition, rack = None, **options))]
@@ -574,7 +577,7 @@ impl PySession {
                 match key.as_str() {
                     "mode" => {
                         o.mode = Mode::parse(&v.extract::<String>()?)
-                            .map_err(|e| PyValueError::new_err(e.to_string()))?
+                            .map_err(|e| PyValueError::new_err(e.to_string()))?;
                     }
                     "max_cycles" => o.max_cycles = Some(v.extract()?),
                     "run_id" => o.run_id = Some(v.extract()?),
@@ -585,7 +588,7 @@ impl PySession {
                         o.units = v
                             .extract::<std::collections::BTreeMap<u32, String>>()?
                             .into_iter()
-                            .collect()
+                            .collect();
                     }
                     "offsite" => o.offsite = v.extract()?,
                     "loggers" => o.loggers = v.extract()?,
@@ -598,7 +601,7 @@ impl PySession {
                         o.tags = v
                             .extract::<std::collections::BTreeMap<String, String>>()?
                             .into_iter()
-                            .collect()
+                            .collect();
                     }
                     other => {
                         return Err(PyValueError::new_err(format!("unknown run option {other:?}")))
@@ -641,17 +644,19 @@ impl PySession {
                 });
             }
         }
-        while ok {
-            let s = self.session.clone();
-            let next = py.detach(|| lock(&s).next_step());
-            let Step::Run(state) = next else { break };
-            let st = Py::new(py, PyMonitorState { inner: state })?;
-            let outcome = match step.call1(py, (ctx.clone_ref(py), st)) {
-                Ok(_) => StepOutcome::Ok,
-                Err(e) if is_interrupt(py, &e) => StepOutcome::Stopped,
-                Err(e) => StepOutcome::Error(error_message(py, &e)),
-            };
-            py.detach(|| lock(&s).complete_step(outcome));
+        if ok {
+            loop {
+                let s = self.session.clone();
+                let next = py.detach(|| lock(&s).next_step());
+                let Step::Run(state) = next else { break };
+                let st = Py::new(py, PyMonitorState { inner: state })?;
+                let outcome = match step.call1(py, (ctx.clone_ref(py), st)) {
+                    Ok(_) => StepOutcome::Ok,
+                    Err(e) if is_interrupt(py, &e) => StepOutcome::Stopped,
+                    Err(e) => StepOutcome::Error(error_message(py, &e)),
+                };
+                py.detach(|| lock(&s).complete_step(outcome));
+            }
         }
         if let Some(f) = &teardown {
             if let Err(e) = f.call1(py, (ctx.clone_ref(py),)) {
@@ -690,7 +695,7 @@ impl PySession {
         Ok(results.into_iter().map(|inner| PyMonitorResult { inner }).collect())
     }
 
-    /// A parameter for the current state; KeyError if undefined.
+    /// A parameter for the current state; `KeyError` if undefined.
     fn param(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let v = lock(&self.session).param(name).cloned().ok_or_else(|| {
             PyKeyError::new_err(format!(
@@ -702,7 +707,7 @@ impl PySession {
 
     /// Sleeps, staying responsive to Ctrl-C / stop requests.
     fn sleep(&self, py: Python<'_>, seconds: f64) -> PyResult<()> {
-        if !(seconds >= 0.0) {
+        if seconds.is_nan() || seconds < 0.0 {
             return Err(PyValueError::new_err(format!("sleep time must be >= 0, got {seconds}")));
         }
         let end = Instant::now() + Duration::from_secs_f64(seconds);
@@ -793,4 +798,291 @@ pub fn parse_event_line(py: Python<'_>, line: &str) -> PyResult<Option<Py<PyAny>
 #[pyfunction]
 pub fn _roundtrip(py: Python<'_>, v: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     Ok(value_to_py(py, &py_to_value(v)?)?.unbind())
+}
+
+// ---------------------------------------------------------------------------
+// CAN bus and UUT client
+// ---------------------------------------------------------------------------
+
+use hwtest_instruments::can::{self, CanBus, CanMessage};
+
+fn can_to_py(py: Python<'_>, m: &CanMessage) -> PyResult<Py<PyAny>> {
+    let d = PyDict::new(py);
+    d.set_item("arbitration_id", m.arbitration_id)?;
+    d.set_item("data", pyo3::types::PyBytes::new(py, &m.data))?;
+    d.set_item("is_extended_id", m.is_extended_id)?;
+    d.set_item("timestamp_ns", m.timestamp_ns)?;
+    Ok(d.into_any().unbind())
+}
+
+/// A CAN interface (`can0`, `vcan0`, `virtual:<name>`). Received frames are
+/// dicts: `{"arbitration_id", "data" (bytes), "is_extended_id", "timestamp_ns"}`.
+#[pyclass(module = "hwtest_core._native", name = "CanBus")]
+pub struct PyCanBus {
+    bus: Arc<dyn CanBus>,
+}
+
+#[pymethods]
+impl PyCanBus {
+    #[new]
+    #[pyo3(signature = (interface = "can0"))]
+    fn new(interface: &str) -> PyResult<Self> {
+        Ok(Self { bus: can::open_can(interface).map_err(hw_err)? })
+    }
+
+    /// Interface name.
+    #[getter]
+    fn name(&self) -> String {
+        self.bus.name().to_string()
+    }
+
+    /// Sends a frame; ids above 0x7FF are sent as extended unless `extended` says otherwise.
+    #[pyo3(signature = (arbitration_id, data = Vec::new(), extended = None))]
+    fn send(
+        &self,
+        py: Python<'_>,
+        arbitration_id: u32,
+        data: Vec<u8>,
+        extended: Option<bool>,
+    ) -> PyResult<()> {
+        let mut m = CanMessage::new(arbitration_id, &data);
+        if let Some(e) = extended {
+            m.is_extended_id = e;
+        }
+        py.detach(|| self.bus.send(&m)).map_err(hw_err)
+    }
+
+    /// The next frame, or None after `timeout` seconds.
+    #[pyo3(signature = (timeout = 1.0))]
+    fn recv(&self, py: Python<'_>, timeout: f64) -> PyResult<Option<Py<PyAny>>> {
+        let m = py
+            .detach(|| self.bus.recv(Duration::from_secs_f64(timeout.max(0.0))))
+            .map_err(hw_err)?;
+        m.map(|m| can_to_py(py, &m)).transpose()
+    }
+
+    /// Waits for a frame with `arbitration_id` (others are discarded); None on timeout.
+    #[pyo3(signature = (arbitration_id, timeout = 1.0))]
+    fn wait_for(
+        &self,
+        py: Python<'_>,
+        arbitration_id: u32,
+        timeout: f64,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let m = py
+            .detach(|| {
+                can::wait_for(
+                    self.bus.as_ref(),
+                    arbitration_id,
+                    Duration::from_secs_f64(timeout.max(0.0)),
+                )
+            })
+            .map_err(hw_err)?;
+        m.map(|m| can_to_py(py, &m)).transpose()
+    }
+
+    /// Frames received during `duration` seconds (optionally only `arbitration_id`).
+    #[pyo3(signature = (duration, arbitration_id = None))]
+    fn collect(
+        &self,
+        py: Python<'_>,
+        duration: f64,
+        arbitration_id: Option<u32>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let ms = py
+            .detach(|| {
+                can::collect(
+                    self.bus.as_ref(),
+                    Duration::from_secs_f64(duration.max(0.0)),
+                    arbitration_id,
+                )
+            })
+            .map_err(hw_err)?;
+        ms.iter().map(|m| can_to_py(py, m)).collect()
+    }
+}
+
+/// Client for the UUT simulator's HTTP API.
+#[pyclass(module = "hwtest_core._native", name = "UutClient")]
+pub struct PyUutClient {
+    client: hwtest_uut_sim::UutClient,
+}
+
+fn uut_err(e: hwtest_uut_sim::client::ClientError) -> PyErr {
+    hw_err(e)
+}
+
+#[pymethods]
+impl PyUutClient {
+    /// `url` defaults to the `UUT_URL` environment variable.
+    #[new]
+    #[pyo3(signature = (url = None, timeout = 5.0))]
+    fn new(url: Option<String>, timeout: f64) -> PyResult<Self> {
+        let url = url
+            .or_else(|| std::env::var("UUT_URL").ok())
+            .ok_or_else(|| PyValueError::new_err("no UUT URL: pass url= or set UUT_URL"))?;
+        Ok(Self { client: hwtest_uut_sim::UutClient::new(&url, Duration::from_secs_f64(timeout)) })
+    }
+    #[getter]
+    fn url(&self) -> String {
+        self.client.base_url().to_string()
+    }
+    fn health(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let v = py.detach(|| self.client.health()).map_err(uut_err)?;
+        Ok(value_to_py(py, &v)?.unbind())
+    }
+    fn status(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let v = py.detach(|| self.client.status()).map_err(uut_err)?;
+        Ok(value_to_py(py, &v)?.unbind())
+    }
+    fn dac_write(&self, py: Python<'_>, channel: u8, voltage: f64) -> PyResult<()> {
+        py.detach(|| self.client.dac_write(channel, voltage)).map_err(uut_err)
+    }
+    fn dac_read(&self, py: Python<'_>, channel: u8) -> PyResult<f64> {
+        py.detach(|| self.client.dac_read(channel)).map_err(uut_err)
+    }
+    fn adc_read(&self, py: Python<'_>, channel: u8) -> PyResult<f64> {
+        py.detach(|| self.client.adc_read(channel)).map_err(uut_err)
+    }
+    #[pyo3(signature = (pin, output, pullup = false))]
+    fn gpio_configure(&self, py: Python<'_>, pin: u8, output: bool, pullup: bool) -> PyResult<()> {
+        py.detach(|| self.client.gpio_configure(pin, output, pullup)).map_err(uut_err)
+    }
+    fn gpio_write(&self, py: Python<'_>, pin: u8, value: bool) -> PyResult<()> {
+        py.detach(|| self.client.gpio_write(pin, value)).map_err(uut_err)
+    }
+    fn gpio_read(&self, py: Python<'_>, pin: u8) -> PyResult<bool> {
+        py.detach(|| self.client.gpio_read(pin)).map_err(uut_err)
+    }
+    #[pyo3(signature = (arbitration_id, data = Vec::new()))]
+    fn can_send(&self, py: Python<'_>, arbitration_id: u32, data: Vec<u8>) -> PyResult<()> {
+        py.detach(|| self.client.can_send(&CanMessage::new(arbitration_id, &data))).map_err(uut_err)
+    }
+    fn can_received(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let v = py.detach(|| self.client.can_received()).map_err(uut_err)?;
+        Ok(value_to_py(py, &v)?.unbind())
+    }
+    fn can_clear_received(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.client.can_clear_received()).map_err(uut_err)
+    }
+    #[pyo3(signature = (enabled, id_offset = 0, filter_ids = None))]
+    fn can_set_echo(
+        &self,
+        py: Python<'_>,
+        enabled: bool,
+        id_offset: i64,
+        filter_ids: Option<Vec<u32>>,
+    ) -> PyResult<()> {
+        py.detach(|| self.client.can_set_echo(enabled, id_offset, filter_ids.as_deref()))
+            .map_err(uut_err)
+    }
+    fn can_heartbeat(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let v = py.detach(|| self.client.can_heartbeat()).map_err(uut_err)?;
+        Ok(value_to_py(py, &v)?.unbind())
+    }
+    fn failure_status(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let v = py.detach(|| self.client.failure_status()).map_err(uut_err)?;
+        Ok(value_to_py(py, &v)?.unbind())
+    }
+    #[pyo3(signature = (delay_seconds = None, duration_seconds = None, voltage_offset = None))]
+    fn failure_configure(
+        &self,
+        py: Python<'_>,
+        delay_seconds: Option<f64>,
+        duration_seconds: Option<f64>,
+        voltage_offset: Option<f64>,
+    ) -> PyResult<()> {
+        py.detach(|| self.client.failure_configure(delay_seconds, duration_seconds, voltage_offset))
+            .map_err(uut_err)
+    }
+    fn failure_reset(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.client.failure_reset()).map_err(uut_err)
+    }
+    /// Emulation only: the UUT DAC output actually driven (including faults).
+    fn emu_dac_output(&self, py: Python<'_>, channel: u8) -> PyResult<f64> {
+        py.detach(|| self.client.emulated_dac_output(channel)).map_err(uut_err)
+    }
+    /// Emulation only: set an emulated UUT ADC input.
+    fn emu_adc_input(&self, py: Python<'_>, channel: u8, voltage: f64) -> PyResult<()> {
+        py.detach(|| self.client.emulate_adc_input(channel, voltage)).map_err(uut_err)
+    }
+    fn __repr__(&self) -> String {
+        format!("UutClient({:?})", self.client.base_url())
+    }
+}
+
+/// An in-process UUT simulator with its HTTP API (for developing and testing
+/// scripts without a UUT). Hardware is emulated; use `can_interface =
+/// "virtual:<name>"` to share a CAN bus with `CanBus("virtual:<name>")`.
+#[pyclass(module = "hwtest_core._native", name = "UutSimulator")]
+pub struct PyUutSimulator {
+    server: Mutex<Option<hwtest_uut_sim::server::BackgroundServer>>,
+    url: String,
+}
+
+#[pymethods]
+impl PyUutSimulator {
+    #[new]
+    #[pyo3(signature = (*, port = 0, host = "127.0.0.1", can_interface = None, loopback = false, heartbeat_interval_ms = 100, failure_delay = 0.0, failure_duration = 10.0, failure_offset = 1.0))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        py: Python<'_>,
+        port: u16,
+        host: &str,
+        can_interface: Option<String>,
+        loopback: bool,
+        heartbeat_interval_ms: u64,
+        failure_delay: f64,
+        failure_duration: f64,
+        failure_offset: f64,
+    ) -> PyResult<Self> {
+        use hwtest_uut_sim::{AdDaBackend, GpioBackend, SimConfig, Simulator};
+        let config = SimConfig {
+            can_interface,
+            heartbeat_interval_ms,
+            adda: AdDaBackend::Emulated { loopback },
+            gpio: GpioBackend::Emulated,
+            failure_delay,
+            failure_duration,
+            failure_offset,
+            ..SimConfig::default()
+        };
+        let server = py
+            .detach(|| {
+                hwtest_uut_sim::server::BackgroundServer::start(
+                    Simulator::start(config),
+                    host,
+                    port,
+                )
+            })
+            .map_err(hw_err)?;
+        let url = format!("http://{}", server.addr());
+        Ok(Self { server: Mutex::new(Some(server)), url })
+    }
+
+    /// Base URL (pass to `UutClient` or set as `UUT_URL`).
+    #[getter]
+    fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    /// Stops the server (also on garbage collection / `with` exit).
+    fn close(&self, py: Python<'_>) {
+        let s = self.server.lock().unwrap_or_else(PoisonError::into_inner).take();
+        py.detach(move || drop(s));
+    }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    #[pyo3(signature = (*_args))]
+    fn __exit__(&self, py: Python<'_>, _args: &Bound<'_, pyo3::types::PyTuple>) -> bool {
+        self.close(py);
+        false
+    }
+
+    fn __repr__(&self) -> String {
+        format!("UutSimulator({:?})", self.url)
+    }
 }

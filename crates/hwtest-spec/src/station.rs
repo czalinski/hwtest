@@ -229,12 +229,16 @@ mod tests {
     #[test]
     fn repository_station_is_valid() {
         let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../hwtest-runner/configs/pi5_bench_a_station.yaml");
+            .join("../../hwtest-intg/configs/pi5_bench_a_station.yaml");
         let s = StationConfig::from_file(p).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(s.id, "pi5-bench-a");
         assert_eq!(s.rack.serial.as_deref(), Some("001"));
         let tc = s.test_case("voltage_echo_monitor").unwrap();
         assert_eq!(tc.modes, ["functional", "hass", "halt"]);
+        for tc in &s.test_cases {
+            let script = s.script_path(tc).unwrap_or_else(|| panic!("{}: no script", tc.id));
+            assert!(script.is_file(), "{}", script.display());
+        }
     }
 
     #[test]

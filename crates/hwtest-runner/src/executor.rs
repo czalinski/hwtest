@@ -214,6 +214,7 @@ impl Executor {
     /// # Errors
     /// [`StartError`] if busy, the test case/mode is invalid, or the script
     /// cannot be started.
+    #[allow(clippy::too_many_lines)]
     pub fn start(&self, test_case_id: &str, mode: &str) -> Result<RunStatus, StartError> {
         let station = &self.config.station;
         let entry = station
