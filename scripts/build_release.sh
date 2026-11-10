@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Build release artifacts for the dev machine (x86_64) and the Pis / Orange Pi (aarch64).
 #
-# Output: dist/*.whl  (abi3 wheels: one file per architecture serves Python >= 3.10)
+# Output: dist/*.whl            abi3 wheels (one per architecture serves Python >= 3.10)
+#         dist/<arch>/hwtest-*   service binaries (rack server, runner, simulators, tools)
 #
 # Cross-compilation uses maturin's zig linker, so no aarch64 sysroot is needed.
 # Prerequisites (one time):
 #   rustup target add aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
 #   pip install "maturin>=1.9.4,<2" "ziglang>=0.13"
+#   cargo install cargo-zigbuild
 #
 # Install on a Pi:
 #   scp dist/hwtest_core-*aarch64*.whl hwtest@<pi>:/tmp/
@@ -47,6 +49,18 @@ for pkg in "${NATIVE_PACKAGES[@]}"; do
     fi
 done
 
+# Rust service binaries (every [[bin]] in the workspace crates).
+command -v cargo-zigbuild >/dev/null || die "cargo-zigbuild not found (cargo install cargo-zigbuild)"
+for arch in x86_64 aarch64; do
+    [[ "$TARGET" == "all" || "$TARGET" == "$arch" ]] || continue
+    (cd "$REPO_ROOT" && cargo zigbuild --release --workspace --exclude hwtest-core-python --bins \
+        --target "$arch-unknown-linux-gnu.2.17")
+    mkdir -p "$REPO_ROOT/dist/$arch"
+    find "$REPO_ROOT/target/$arch-unknown-linux-gnu/release" -maxdepth 1 -type f -name 'hwtest-*' \
+        ! -name '*.d' -exec cp {} "$REPO_ROOT/dist/$arch/" \;
+done
+
 echo
 echo "Built:"
 ls -1 "$REPO_ROOT/dist"/*.whl
+ls -1 "$REPO_ROOT"/dist/*/hwtest-* 2>/dev/null || true

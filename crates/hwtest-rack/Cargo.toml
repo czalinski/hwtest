@@ -1,0 +1,35 @@
+[package]
+name = "hwtest-rack"
+description = "Test rack runtime, calibration and status server for hwtest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "hwtest-rack"
+path = "src/bin/hwtest_rack.rs"
+
+[dependencies]
+hwtest-core.workspace = true
+hwtest-spec.workspace = true
+hwtest-nats.workspace = true
+hwtest-instruments.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+axum = "0.8"
+
+[dev-dependencies]
+tempfile.workspace = true
+tower-service = "0.3"
+
+[lints]
+workspace = true
